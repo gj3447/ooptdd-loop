@@ -7,6 +7,15 @@ from .runner import RunResult
 def _check_miss(c: dict) -> str:
     """One-line description of a failed gate check, for every check shape
     (event / where / must_order)."""
+    if "conforms" in c:
+        viols = c.get("violations") or []
+        if not viols:
+            return f"conforms {c['conforms']} — no ontology loaded"
+        first = viols[0]
+        probs = ", ".join(first.get("problems", []))
+        ev = first.get("event", "?")
+        more = f" (+{len(viols) - 1} more)" if len(viols) > 1 else ""
+        return f"conforms {c['conforms']} — {ev}: {probs}{more}"
     if "must_order" in c:
         seq = ">".join(c["must_order"])
         if c.get("missing"):
@@ -51,8 +60,12 @@ def next_step_context(run: RunResult) -> str:
         if r.done:
             continue
         blocks.append(f"### {r.id} — {r.description}")
-        if not r.gate_ok and r.rca:
-            blocks.append(r.rca)
+        if not r.gate_ok:
+            for c in r.checks:
+                if not c["passed"]:
+                    blocks.append("gate miss: " + _check_miss(c))   # precise reason
+            if r.rca:
+                blocks.append(r.rca)                                 # aggregation context
         if r.binding is not None and not r.binding.bound:
             blocks.append(f"Longinus UNBOUND: {r.binding.reason} "
                           f"(anchor {r.binding.kg_anchor} must point at the real emitter)")

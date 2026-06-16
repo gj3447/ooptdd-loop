@@ -102,12 +102,18 @@ def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False) -> R
     cid = cid or os.getenv("OOPTDD_CID") or f"loop-{uuid.uuid4().hex[:12]}"
     backend = get_backend(spec.target.backend, **spec.target.backend_options)
 
+    ontology = None
+    if spec.target.ontology:
+        from ooptdd.ontology import Ontology  # file-first; offline, no KG dependency
+
+        ontology = Ontology.from_file(os.path.join(spec.target.root, spec.target.ontology))
+
     _produce_logs(spec, backend, cid)
 
     run = RunResult(cid=cid, backend=spec.target.backend)
     for req in spec.requirements:
         gate_spec = {"cid": cid, "expect": req.gate}
-        ev = evaluate(backend, gate_spec)
+        ev = evaluate(backend, gate_spec, ontology=ontology)
         binding = (
             verify_binding(spec.target.root, req.longinus) if req.longinus else None
         )

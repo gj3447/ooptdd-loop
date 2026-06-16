@@ -11,8 +11,9 @@ def _ev(cid, event, **attrs):
             "service": "shop", "event": event, **attrs}
 
 
-def authorize_payment(backend, cid):
-    backend.ship([_ev(cid, "payment_authorized")])
+def authorize_payment(backend, cid, amount=42.0):
+    # emits the amount so the event conforms to the PaymentAuthorized ontology type
+    backend.ship([_ev(cid, "payment_authorized", amount=amount)])
 
 
 def pack_items(backend, cid, n):

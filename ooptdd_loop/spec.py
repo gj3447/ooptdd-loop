@@ -51,6 +51,7 @@ class Target:
     command: str | None = None
     backend: str = "memory"
     root: str = "."
+    ontology: str | None = None    # path (relative to root) to an event ontology yaml
     backend_options: dict = field(default_factory=dict)
 
 
@@ -72,6 +73,7 @@ def load_spec(path: str) -> Spec:
         command=t.get("command"),
         backend=t.get("backend", "memory"),
         root=t.get("root", "."),
+        ontology=t.get("ontology"),
         backend_options=dict(t.get("backend_options", {})),
     )
     reqs = []

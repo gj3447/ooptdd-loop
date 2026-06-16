@@ -1,0 +1,20 @@
+# Event ontology for the shop pipeline (offline projection of the KG mirror).
+# Declares every event the pipeline may emit + their invariants. With
+# `conforms: "*" closed_world: true` an undeclared event = hallucination drift.
+closed_world: false
+
+event_types:
+  order_received:
+    description: an order entered the pipeline
+  payment_authorized:
+    description: payment authorized; must carry a non-negative amount
+    required: [amount]
+    constraints:
+      amount: {type: number, min: 0}
+  line_item_packed:
+    description: one line item packed
+    required: [index]
+    constraints:
+      index: {type: int, min: 0}
+  order_shipped:
+    description: the order shipped

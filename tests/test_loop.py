@@ -56,6 +56,41 @@ def test_render_smoke():
     assert "COMPLETE" in out and "REQ-1" in out
 
 
+ONTO_SPEC = os.path.join(ROOT, "example", "requirements_ontology.yaml")
+
+
+def test_ontology_requirements_complete():
+    # shop emits a conforming payment_authorized (with amount) -> conforms GREEN
+    run = run_loop(load_spec(ONTO_SPEC))
+    assert run.complete, [(_r.id, _r.checks) for _r in run.results]
+
+
+def test_conforms_violation_is_red_and_renders(tmp_path):
+    # an ontology requiring an attr the code never emits -> conforms RED, no crash
+    (tmp_path / "onto.yaml").write_text(
+        "event_types:\n  order_shipped:\n    required: [tracking_no]\n"
+    )
+    spec_txt = """
+target:
+  mode: in_process
+  callable: shop:run_pipeline
+  backend: memory
+  root: %s
+  ontology: %s
+requirements:
+  - id: SHIP-CONFORMS
+    description: shipment carries a tracking number
+    gate: [{conforms: order_shipped}]
+""" % (os.path.join(ROOT, "example"), str(tmp_path / "onto.yaml"))
+    p = tmp_path / "spec.yaml"
+    p.write_text(spec_txt)
+    run = run_loop(load_spec(str(p)))
+    r = run.results[0]
+    assert r.gate_ok is False and not run.complete
+    out = render(run)                       # must not raise on a conforms failure
+    assert "conforms" in out and "tracking_no" in out
+
+
 def test_must_order_and_where_gates(tmp_path):
     # richer ooptdd gate shapes flow through the loop without crashing, both GREEN
     # (correct order / matching where) and RED (impossible order) — regression for
