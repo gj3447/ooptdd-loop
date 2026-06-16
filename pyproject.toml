@@ -16,10 +16,12 @@ dependencies = [
 
 [project.optional-dependencies]
 kg = ["neo4j>=5.0"]
+mcp = ["mcp>=1.0"]
 dev = ["pytest>=7.0", "ruff>=0.4"]
 
 [project.scripts]
 ooptdd-loop = "ooptdd_loop.cli:main"
+ooptdd-loop-mcp = "ooptdd_loop.mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ooptdd_loop"]
