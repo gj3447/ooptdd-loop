@@ -98,7 +98,8 @@ def _produce_logs(spec: Spec, backend, cid: str) -> None:
         raise ValueError(f"unknown target mode {t.mode!r}")
 
 
-def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False) -> RunResult:
+def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False,
+             kg_store=None) -> RunResult:
     cid = cid or os.getenv("OOPTDD_CID") or f"loop-{uuid.uuid4().hex[:12]}"
     backend = get_backend(spec.target.backend, **spec.target.backend_options)
 
@@ -127,17 +128,20 @@ def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False) -> R
         elif kg_write and binding is not None:
             write_to_kg(binding, cycle_id=cid)
         run.results.append(rr)
+    if kg_store is not None:
+        # KG-native I/O: persist the run so coverage/drift become queries (V2)
+        kg_store.write_run(cid, spec.name, run.results)
     return run
 
 
 def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 1,
-                       kg_write: bool = False):
+                       kg_write: bool = False, kg_store=None):
     """Run the loop up to ``max_passes`` times (the code does not change between
     passes — re-runs only help with async-ingest latency on networked backends).
     Returns the final RunResult."""
     last = None
     for _ in range(max(max_passes, 1)):
-        last = run_loop(spec, cid=cid, kg_write=kg_write)
+        last = run_loop(spec, cid=cid, kg_write=kg_write, kg_store=kg_store)
         if last.complete:
             break
         time.sleep(0.0)
