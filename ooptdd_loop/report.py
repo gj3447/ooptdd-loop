@@ -4,6 +4,20 @@ from __future__ import annotations
 from .runner import RunResult
 
 
+def _check_miss(c: dict) -> str:
+    """One-line description of a failed gate check, for every check shape
+    (event / where / must_order)."""
+    if "must_order" in c:
+        seq = ">".join(c["must_order"])
+        if c.get("missing"):
+            return f"order [{seq}] — missing events {c['missing']}"
+        return f"order [{seq}] — events present but out of order"
+    target = c.get("event") or (
+        "where:" + ",".join(f"{k}={v}" for k, v in (c.get("where") or {}).items())
+    ) or "(any)"
+    return f"{target} {c.get('op')} {c.get('want')} (got {c.get('got')})"
+
+
 def render(run: RunResult) -> str:
     lines = [
         f"ooptdd-loop  cid={run.cid}  backend={run.backend}",
@@ -19,9 +33,7 @@ def render(run: RunResult) -> str:
         if not r.gate_ok:
             for c in r.checks:
                 if not c["passed"]:
-                    lines.append(
-                        f"     gate miss: {c['event']} {c['op']} {c['want']} (got {c['got']})"
-                    )
+                    lines.append("     gate miss: " + _check_miss(c))
         if r.binding is not None and not r.binding.bound:
             lines.append(f"     longinus: {r.binding.reason}")
     return "\n".join(lines)

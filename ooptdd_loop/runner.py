@@ -64,6 +64,18 @@ class RunResult:
         return sum(1 for r in self.results if r.done)
 
 
+def _want_events(gate: list[dict]) -> list[str]:
+    """Event names a gate refers to, across every check shape (event / where /
+    must_order). Used to focus the RCA on what the requirement actually expects."""
+    want: list[str] = []
+    for c in gate:
+        if "must_order" in c:
+            want += [e for e in c["must_order"] if e not in want]
+        elif c.get("event") and c["event"] not in want:
+            want.append(c["event"])
+    return want
+
+
 def _produce_logs(spec: Spec, backend, cid: str) -> None:
     """Run the system under test so it emits events under ``cid``."""
     t = spec.target
@@ -104,8 +116,8 @@ def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False) -> R
             reachable=ev["reachable"], checks=ev["checks"], binding=binding,
         )
         if not rr.done:
-            want = [c["event"] for c in req.gate]
-            rr.rca = rca_block(backend, cid, mode=spec.target.backend, want_events=want)
+            rr.rca = rca_block(backend, cid, mode=spec.target.backend,
+                               want_events=_want_events(req.gate))
         elif kg_write and binding is not None:
             write_to_kg(binding, cycle_id=cid)
         run.results.append(rr)
