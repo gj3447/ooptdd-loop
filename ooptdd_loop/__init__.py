@@ -17,8 +17,27 @@ Longinus binding points at source that really exists and really emits them. That
 makes wrong development *detectable and self-correcting*, not impossible — the
 honest version of "it can't go wrong".
 """
-from .spec import Requirement, load_spec
-from .runner import RunResult, run_loop
+from .rules import canonical_rules
+from .spec import Contract, Methodology, Requirement, load_spec
+from .runner import RunResult, evaluate_requirements, run_loop
+from .tools import call, list_tools
+from .golden import diff_golden, save_golden
+from .local_capture import capture_logging_to_backend, structlog_event_processor
 
-__all__ = ["Requirement", "load_spec", "RunResult", "run_loop"]
+__all__ = [
+    "Contract",
+    "Methodology",
+    "Requirement",
+    "RunResult",
+    "call",
+    "canonical_rules",
+    "capture_logging_to_backend",
+    "diff_golden",
+    "evaluate_requirements",
+    "list_tools",
+    "load_spec",
+    "run_loop",
+    "save_golden",
+    "structlog_event_processor",
+]
 __version__ = "0.1.0"

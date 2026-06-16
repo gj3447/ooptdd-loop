@@ -20,13 +20,15 @@ import os
 import subprocess
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 from ooptdd.backends import get_backend
-from ooptdd.gate import evaluate
 
+from .selector_gates import evaluate_gate, selector_event_names
 from .longinus import ReferenceSite, verify_binding, write_to_kg
 from .oo_rca import rca_block
+from .rules import RuleCheck, evaluate_spec_rules, rule_checks_ok
 from .spec import Spec
 
 
@@ -54,10 +56,19 @@ class RunResult:
     cid: str
     backend: str
     results: list[ReqResult] = field(default_factory=list)
+    methodology_checks: list[RuleCheck] = field(default_factory=list)
+
+    @property
+    def methodology_ok(self) -> bool:
+        return rule_checks_ok(self.methodology_checks)
 
     @property
     def complete(self) -> bool:
-        return bool(self.results) and all(r.done for r in self.results)
+        return (
+            bool(self.results)
+            and all(r.done for r in self.results)
+            and self.methodology_ok
+        )
 
     @property
     def n_done(self) -> int:
@@ -69,8 +80,13 @@ def _want_events(gate: list[dict]) -> list[str]:
     must_order). Used to focus the RCA on what the requirement actually expects."""
     want: list[str] = []
     for c in gate:
-        if "must_order" in c:
-            want += [e for e in c["must_order"] if e not in want]
+        if "select" in c or "selector" in c:
+            want += [e for e in selector_event_names(c) if e not in want]
+        elif "must_order" in c:
+            if any(isinstance(e, dict) for e in c["must_order"]):
+                want += [e for e in selector_event_names(c) if e not in want]
+            else:
+                want += [e for e in c["must_order"] if e not in want]
         elif c.get("event") and c["event"] not in want:
             want.append(c["event"])
     return want
@@ -88,7 +104,20 @@ def _produce_logs(spec: Spec, backend, cid: str) -> None:
         if t.root and t.root not in sys.path:
             sys.path.insert(0, t.root)
         mod = importlib.import_module(mod_name)
-        getattr(mod, fn)(backend, cid)
+        capture = t.capture or {}
+        capture_ctx = nullcontext()
+        if capture.get("logging"):
+            from .local_capture import capture_logging_to_backend
+
+            capture_ctx = capture_logging_to_backend(
+                backend,
+                cid,
+                logger_name=capture.get("logger") or capture.get("logger_name"),
+                level=capture.get("level", "INFO"),
+                service=capture.get("service"),
+            )
+        with capture_ctx:
+            getattr(mod, fn)(backend, cid)
     elif t.mode == "command":
         if not t.command:
             raise ValueError("command target needs `command:`")
@@ -98,23 +127,37 @@ def _produce_logs(spec: Spec, backend, cid: str) -> None:
         raise ValueError(f"unknown target mode {t.mode!r}")
 
 
-def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False,
-             kg_store=None) -> RunResult:
-    cid = cid or os.getenv("OOPTDD_CID") or f"loop-{uuid.uuid4().hex[:12]}"
-    backend = get_backend(spec.target.backend, **spec.target.backend_options)
+def _new_cid(prefix: str = "loop") -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
+
+def _load_ontology(spec: Spec):
     ontology = None
     if spec.target.ontology:
         from ooptdd.ontology import Ontology  # file-first; offline, no KG dependency
 
         ontology = Ontology.from_file(os.path.join(spec.target.root, spec.target.ontology))
+    return ontology
 
-    _produce_logs(spec, backend, cid)
 
-    run = RunResult(cid=cid, backend=spec.target.backend)
+def evaluate_requirements(spec: Spec, *, cid: str, backend=None, kg_write: bool = False,
+                          kg_store=None) -> RunResult:
+    """Evaluate gates and Longinus bindings for logs that already exist.
+
+    This is the pytest/CI harness path: the test session produced events under
+    ``cid``; OOPTDD only judges the arrived evidence and source bindings.
+    """
+    backend = backend or get_backend(spec.target.backend, **spec.target.backend_options)
+    ontology = _load_ontology(spec)
+
+    run = RunResult(
+        cid=cid,
+        backend=spec.target.backend,
+        methodology_checks=evaluate_spec_rules(spec),
+    )
     for req in spec.requirements:
         gate_spec = {"cid": cid, "expect": req.gate}
-        ev = evaluate(backend, gate_spec, ontology=ontology)
+        ev = evaluate_gate(backend, gate_spec, ontology=ontology)
         binding = (
             verify_binding(spec.target.root, req.longinus) if req.longinus else None
         )
@@ -132,6 +175,20 @@ def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False,
         # KG-native I/O: persist the run so coverage/drift become queries (V2)
         kg_store.write_run(cid, spec.name, run.results)
     return run
+
+
+def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False,
+             kg_store=None) -> RunResult:
+    cid = cid or os.getenv("OOPTDD_CID") or _new_cid()
+    backend = get_backend(spec.target.backend, **spec.target.backend_options)
+    _produce_logs(spec, backend, cid)
+    return evaluate_requirements(
+        spec,
+        cid=cid,
+        backend=backend,
+        kg_write=kg_write,
+        kg_store=kg_store,
+    )
 
 
 def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 1,

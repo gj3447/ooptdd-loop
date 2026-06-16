@@ -1,0 +1,43 @@
+name: local-capture-demo
+
+target:
+  mode: in_process
+  callable: logging_app:run_pipeline
+  backend: memory
+  root: example
+  capture:
+    logging: true
+    logger: checkout
+
+requirements:
+  - id: REQ-CAPTURE-PAY
+    description: logging extra fields are captured as an event
+    gate:
+      - select:
+          event: payment_authorized
+          service: checkout
+          operation: authorize
+          attrs: {amount: 42}
+        op: "=="
+        count: 1
+    longinus:
+      kg_anchor: ref_site:logging:payment
+      source: logging_app.py
+      symbol: run_pipeline
+      must_emit: payment_authorized
+
+  - id: REQ-CAPTURE-SHIP
+    description: dict log messages are captured as events
+    gate:
+      - select:
+          event: order_shipped
+          service: fulfillment
+          operation: ship
+          attrs: {tracking_no: T-1}
+        op: "=="
+        count: 1
+    longinus:
+      kg_anchor: ref_site:logging:ship
+      source: logging_app.py
+      symbol: run_pipeline
+      must_emit: order_shipped
