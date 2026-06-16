@@ -1,0 +1,31 @@
+# V1 demo: ontology-typed requirements. The gate now checks not just that events
+# arrived, but that they CONFORM to their type — catching what a flat gate can't.
+# Run:  ooptdd-loop run example/requirements_ontology.yaml
+target:
+  mode: in_process
+  callable: shop:run_pipeline
+  backend: memory
+  root: example
+  ontology: ontology.yaml
+
+requirements:
+  - id: REQ-PAY-CONFORMS
+    description: payment_authorized arrives AND carries a valid amount
+    gate:
+      - {event: payment_authorized, op: "==", count: 1}   # flat: it arrived
+      - {conforms: payment_authorized}                     # ontology: it's well-formed
+    longinus:
+      kg_anchor: ref_site:shop:payment
+      source: shop.py
+      symbol: authorize_payment
+      must_emit: payment_authorized
+
+  - id: REQ-NO-DRIFT
+    description: the pipeline emits no undeclared (hallucinated) event types
+    gate:
+      - {conforms: "*", closed_world: true}                # any unknown type = drift RED
+    longinus:
+      kg_anchor: ref_site:shop:pipeline
+      source: shop.py
+      symbol: run_pipeline
+      must_emit: order_shipped
