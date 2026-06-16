@@ -59,9 +59,12 @@ class Target:
 class Spec:
     target: Target
     requirements: list[Requirement]
+    name: str = "spec"          # identifies this requirement set in the KG
 
 
 def load_spec(path: str) -> Spec:
+    import os
+
     import yaml
 
     with open(path) as fh:
@@ -89,4 +92,5 @@ def load_spec(path: str) -> Spec:
         )
     if not reqs:
         raise ValueError(f"{path}: no requirements declared")
-    return Spec(target=target, requirements=reqs)
+    name = data.get("name") or os.path.splitext(os.path.basename(path))[0]
+    return Spec(target=target, requirements=reqs, name=name)
