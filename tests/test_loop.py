@@ -54,3 +54,31 @@ def test_longinus_unbound_when_symbol_missing():
 def test_render_smoke():
     out = render(run_loop(load_spec(MET)))
     assert "COMPLETE" in out and "REQ-1" in out
+
+
+def test_must_order_and_where_gates(tmp_path):
+    # richer ooptdd gate shapes flow through the loop without crashing, both GREEN
+    # (correct order / matching where) and RED (impossible order) — regression for
+    # the KeyError('event') the loop hit on a failing must_order check.
+    spec_txt = """
+target: {mode: in_process, callable: shop:run_pipeline, backend: memory, root: %s}
+requirements:
+  - id: OK-ORDER
+    description: steps in order
+    gate: [{must_order: [order_received, payment_authorized, order_shipped]}]
+  - id: OK-WHERE
+    description: 3 items
+    gate: [{event: order_received, where: {items: 3}, op: "==", count: 1}]
+  - id: BAD-ORDER
+    description: impossible order
+    gate: [{must_order: [order_shipped, order_received]}]
+""" % os.path.join(ROOT, "example")
+    p = tmp_path / "spec.yaml"
+    p.write_text(spec_txt)
+    run = run_loop(load_spec(str(p)))
+    by = {r.id: r for r in run.results}
+    assert by["OK-ORDER"].gate_ok and by["OK-WHERE"].gate_ok
+    assert by["BAD-ORDER"].gate_ok is False
+    out = render(run)                       # must not raise on the failed must_order
+    assert "out of order" in out
+    assert not run.complete
