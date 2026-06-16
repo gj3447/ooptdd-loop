@@ -1,0 +1,90 @@
+"""Requirement spec — the Red artifact, written before the code satisfies it.
+
+A spec file declares the target (how to produce logs) and a list of requirements.
+Each requirement is a trace gate (expected events) plus a Longinus binding (which
+source symbol is supposed to emit them). The gate is the machine verdict; the
+binding is what keeps the verdict honest — it must point at code that exists.
+
+    target:
+      mode: in_process            # in_process | command
+      callable: shop:run_pipeline # in_process: module:function(backend, cid)
+      # command: "pytest -q"      # command: a shell command that ships to the store
+      backend: memory             # memory | openobserve | otel | <entrypoint>
+      root: .                     # source root for Longinus checks
+
+    requirements:
+      - id: REQ-1
+        description: payment is authorized exactly once
+        gate:
+          - {event: payment_authorized, op: "==", count: 1}
+        longinus:
+          kg_anchor: ref_site:shop:orders:payment
+          source: shop.py
+          symbol: authorize_payment
+          must_emit: payment_authorized
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class Longinus:
+    kg_anchor: str
+    source: str
+    symbol: str
+    must_emit: str
+
+
+@dataclass
+class Requirement:
+    id: str
+    description: str
+    gate: list[dict]
+    longinus: Longinus | None = None
+
+
+@dataclass
+class Target:
+    mode: str = "in_process"       # in_process | command
+    callable: str | None = None    # "module:function"
+    command: str | None = None
+    backend: str = "memory"
+    root: str = "."
+    backend_options: dict = field(default_factory=dict)
+
+
+@dataclass
+class Spec:
+    target: Target
+    requirements: list[Requirement]
+
+
+def load_spec(path: str) -> Spec:
+    import yaml
+
+    with open(path) as fh:
+        data = yaml.safe_load(fh) or {}
+    t = data.get("target", {})
+    target = Target(
+        mode=t.get("mode", "in_process"),
+        callable=t.get("callable"),
+        command=t.get("command"),
+        backend=t.get("backend", "memory"),
+        root=t.get("root", "."),
+        backend_options=dict(t.get("backend_options", {})),
+    )
+    reqs = []
+    for r in data.get("requirements", []):
+        lon = r.get("longinus")
+        reqs.append(
+            Requirement(
+                id=r["id"],
+                description=r.get("description", ""),
+                gate=r.get("gate", []),
+                longinus=Longinus(**lon) if lon else None,
+            )
+        )
+    if not reqs:
+        raise ValueError(f"{path}: no requirements declared")
+    return Spec(target=target, requirements=reqs)

@@ -1,0 +1,30 @@
+# An UNMET spec: two requirements the current shop.py does NOT satisfy yet.
+# This is what the agent sees mid-loop — a RED gate (event never emitted) and an
+# UNBOUND Longinus (the claimed emitter doesn't exist). Run:
+#   ooptdd-loop run example/requirements_unmet.yaml   # exits 1, prints RCA
+target:
+  mode: in_process
+  callable: shop:run_pipeline
+  backend: memory
+  root: example
+
+requirements:
+  - id: REQ-FRAUD
+    description: a fraud check runs before payment   # not implemented yet -> RED
+    gate:
+      - {event: fraud_checked, op: "==", count: 1}
+    longinus:
+      kg_anchor: ref_site:shop:fraud
+      source: shop.py
+      symbol: run_fraud_check        # symbol does not exist -> UNBOUND
+      must_emit: fraud_checked
+
+  - id: REQ-1
+    description: an order is received exactly once   # this one is GREEN already
+    gate:
+      - {event: order_received, op: "==", count: 1}
+    longinus:
+      kg_anchor: ref_site:shop:received
+      source: shop.py
+      symbol: run_pipeline
+      must_emit: order_received
