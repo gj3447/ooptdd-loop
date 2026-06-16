@@ -4,10 +4,11 @@ When a requirement is RED, the agent should not guess — it should read what th
 store actually saw. This module turns the store's view of a correlation id into a
 compact, aggregation-first summary (never a raw dump) the agent can act on.
 
-Two sources, in order:
-  1. the ``oo`` CLI (oo-mcp client) — ``oo trace <cid>`` for the full cross-stream
-     timeline — when available (the real oo-mcp path).
-  2. otherwise the configured backend's own query (works offline with memory).
+Three sources, in order:
+  1. the log server MCP endpoint (``OO_MCP_URL`` or the workspace default)
+     via ``trace_cycle``.
+  2. the ``oo`` CLI (also an oo-mcp client) — ``oo trace <cid>`` — when available.
+  3. otherwise the configured backend's own query (works offline with memory).
 """
 from __future__ import annotations
 
@@ -16,13 +17,19 @@ import shutil
 import subprocess
 import time
 
+from .log_mcp import logserver_trace
+
 
 def _have_oo() -> bool:
     return shutil.which("oo") is not None
 
 
 def oo_trace_summary(cid: str, *, minutes: int = 60, timeout: float = 20.0) -> dict | None:
-    """`oo trace <cid> --json` parsed, or None if oo is unavailable/failed."""
+    """MCP ``trace_cycle`` / ``oo trace <cid> --json`` parsed, or None on failure."""
+    via_mcp = logserver_trace(cid, minutes_back=minutes, timeout=timeout)
+    if via_mcp.get("reachable") and isinstance(via_mcp.get("result"), dict):
+        return via_mcp["result"]
+
     if not _have_oo():
         return None
     try:

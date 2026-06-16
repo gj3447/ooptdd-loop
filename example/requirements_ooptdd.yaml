@@ -1,0 +1,37 @@
+# OOPTDD opt-in demo: LTDD trace proof plus object/message contract rules.
+# Run:  ooptdd-loop run example/requirements_ooptdd.yaml
+name: shop-ooptdd-demo
+
+methodology:
+  name: OOPTDD_methodology_v1
+  enforce: true
+
+target:
+  mode: in_process
+  callable: shop:run_pipeline
+  backend: memory
+  root: example
+
+contracts:
+  - id: MC-PAYMENT-AUTH
+    kind: message_contract
+    description: payment authorizer accepts the payment_authorized protocol
+    role: PaymentAuthorizer
+    receiver: PaymentAuthorizer
+    message: authorize_payment
+    status: accepted
+    source_req: REQ-PAY
+    integration_backstop: REQ-PAY
+
+requirements:
+  - id: REQ-PAY
+    kind: guiding
+    description: payment is authorized exactly once
+    covers: [MC-PAYMENT-AUTH]
+    gate:
+      - {event: payment_authorized, op: "==", count: 1}
+    longinus:
+      kg_anchor: ref_site:shop:payment
+      source: shop.py
+      symbol: authorize_payment
+      must_emit: payment_authorized

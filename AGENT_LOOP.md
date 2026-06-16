@@ -71,3 +71,16 @@ A minimal autonomous driver: run `--json`; if `complete` is false, hand the
 `requirements[].checks` + the stderr RCA to the dev agent as its next prompt;
 re-run after its edit; stop when `complete` is true. The loop is deterministic;
 only the dev step is the model.
+
+## Harness surface map
+
+- **Local coding harness (L_IDE)**: `ooptdd-loop run`, `validate-spec`, pytest,
+  `next_step_context`.
+- **Agent runtime harness (L_RT)**: `ooptdd-loop-mcp`, `ooptdd-loop mcp`, and
+  `ooptdd_loop.tools.call()` expose the loop as callable tools. `logserver_*`
+  tools bridge to the upstream `oo-mcp` log server for runtime evidence.
+- **Managed/control-plane harness (L_MC)**: KG seed, coverage, drift, and
+  Longinus ReferenceSites make completion and source drift queryable. RED RCA
+  reads log-server MCP `trace_cycle` first, then falls back to the local backend.
+
+Run `ooptdd-loop harness-profile --json` for the machine-readable map.

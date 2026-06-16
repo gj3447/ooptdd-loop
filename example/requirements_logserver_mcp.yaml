@@ -1,0 +1,45 @@
+# Real OOPTDD pilot: prove the upstream oo-mcp logserver bridge through OpenObserve.
+# Run:
+#   export OOPTDD_OO_URL=http://100.64.0.10:5080
+#   export OOPTDD_OO_USER=...
+#   export OOPTDD_OO_PASSWORD=...
+#   export OO_MCP_URL=http://100.64.0.10:55014/mcp
+#   ooptdd-loop run example/requirements_logserver_mcp.yaml
+name: ooptdd-logserver-mcp-pilot
+
+methodology:
+  name: OOPTDD_methodology_v1
+  enforce: true
+
+target:
+  mode: in_process
+  callable: logserver_pilot:check_logserver_health
+  backend: openobserve
+  backend_options:
+    stream: ooptdd_demo
+  root: example
+
+contracts:
+  - id: MC-LOGSERVER-HEALTH
+    kind: message_contract
+    description: OOPTDD runtime asks the upstream oo-mcp logserver for ingest health.
+    role: OOPTDDRuntime
+    receiver: OoMcpLogServer
+    message: logserver_health
+    status: accepted
+    source_req: REQ-LOGSERVER-HEALTH
+    integration_backstop: REQ-LOGSERVER-HEALTH
+
+requirements:
+  - id: REQ-LOGSERVER-HEALTH
+    kind: guiding
+    description: OOPTDD can query upstream oo-mcp health and ship a proof event.
+    covers: [MC-LOGSERVER-HEALTH]
+    gate:
+      - {event: logserver_health_checked, where: {reachable: true}, op: "==", count: 1}
+      - {event: logserver_health_checked, op: "==", count: 1}
+    longinus:
+      kg_anchor: ref_site:ooptdd:logserver_mcp_pilot
+      source: logserver_pilot.py
+      symbol: check_logserver_health
+      must_emit: logserver_health_checked

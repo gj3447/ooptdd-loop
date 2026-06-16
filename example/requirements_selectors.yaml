@@ -1,0 +1,48 @@
+name: shop-selector-demo
+
+target:
+  mode: in_process
+  callable: shop:run_pipeline
+  backend: memory
+  root: example
+
+requirements:
+  - id: REQ-SEL-COUNT
+    description: an order is received by the shop service with the expected item count
+    gate:
+      - select:
+          event: order_received
+          service: shop
+          attrs: {items: 3}
+        op: "=="
+        count: 1
+    longinus:
+      kg_anchor: ref_site:shop:selector:received
+      source: shop.py
+      symbol: run_pipeline
+      must_emit: order_received
+
+  - id: REQ-SEL-ORDER
+    description: selected shop events happen in the expected order
+    gate:
+      - must_order:
+          - {event: order_received, service: shop}
+          - {event: payment_authorized, service: shop}
+          - {event: order_shipped, service: shop}
+    longinus:
+      kg_anchor: ref_site:shop:selector:order
+      source: shop.py
+      symbol: run_pipeline
+      must_emit: order_shipped
+
+  - id: REQ-SEL-CAUSAL
+    description: payment authorization follows order receipt
+    gate:
+      - select: {event: payment_authorized, service: shop}
+        after: {event: order_received, service: shop}
+        within_s: 5
+    longinus:
+      kg_anchor: ref_site:shop:selector:payment
+      source: shop.py
+      symbol: authorize_payment
+      must_emit: payment_authorized
