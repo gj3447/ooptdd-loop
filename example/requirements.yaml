@@ -1,0 +1,48 @@
+# A satisfied spec: every requirement is GREEN and Longinus-bound against shop.py.
+# Run:  ooptdd-loop run example/requirements.yaml
+target:
+  mode: in_process
+  callable: shop:run_pipeline   # called as run_pipeline(backend, cid)
+  backend: memory               # zero-infra; swap for openobserve in real use
+  root: example                 # source root for Longinus checks + import
+
+requirements:
+  - id: REQ-1
+    description: an order is received exactly once
+    gate:
+      - {event: order_received, op: "==", count: 1}
+    longinus:
+      kg_anchor: ref_site:shop:received
+      source: shop.py
+      symbol: run_pipeline
+      must_emit: order_received
+
+  - id: REQ-2
+    description: payment is authorized exactly once
+    gate:
+      - {event: payment_authorized, op: "==", count: 1}
+    longinus:
+      kg_anchor: ref_site:shop:payment
+      source: shop.py
+      symbol: authorize_payment
+      must_emit: payment_authorized
+
+  - id: REQ-3
+    description: at least 3 line items are packed
+    gate:
+      - {event: line_item_packed, op: ">=", count: 3}
+    longinus:
+      kg_anchor: ref_site:shop:pack
+      source: shop.py
+      symbol: pack_items
+      must_emit: line_item_packed
+
+  - id: REQ-4
+    description: the order is shipped exactly once
+    gate:
+      - {event: order_shipped, op: "==", count: 1}
+    longinus:
+      kg_anchor: ref_site:shop:shipped
+      source: shop.py
+      symbol: run_pipeline
+      must_emit: order_shipped
