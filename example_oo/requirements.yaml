@@ -1,0 +1,30 @@
+# R1: verify against a REAL OpenObserve, cross-process.
+# The events are shipped by a separate process (ship_pipeline.py); this loop only
+# VERIFIES they arrived in oo. The target command is a no-op (`true`) so the loop
+# does not itself produce — it just polls the external store.
+#
+#   OOPTDD_CID=<id> python example_oo/ship_pipeline.py     # process 1: ship to oo
+#   sleep 8                                                  # let oo ingest
+#   OOPTDD_OO_URL=.. OOPTDD_OO_PASSWORD=.. \
+#     ooptdd-loop run example_oo/requirements.yaml --cid <id>   # process 2: verify
+name: ooptdd-oo-demo
+target:
+  mode: command
+  command: "true"            # no-op: the system under test ran elsewhere
+  backend: openobserve
+  root: example_oo
+  backend_options:
+    stream: ooptdd_demo
+
+requirements:
+  - id: OO-1
+    description: the order pipeline's events landed in oo under this cid
+    gate:
+      - {event: order_received, op: ">=", count: 1}
+      - {event: payment_authorized, op: ">=", count: 1}
+      - {event: order_shipped, op: ">=", count: 1}
+    longinus:
+      kg_anchor: ref_site:oo:pipeline
+      source: ship_pipeline.py
+      symbol: main
+      must_emit: order_shipped
