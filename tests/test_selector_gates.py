@@ -3,7 +3,7 @@ import pytest
 from ooptdd.backends import memory_reset
 from ooptdd_loop.report import render
 from ooptdd_loop.runner import run_loop
-from ooptdd_loop.spec import load_spec
+from ooptdd_loop.domain.spec import load_spec
 from ooptdd_loop.tools import call
 
 
@@ -177,7 +177,7 @@ def test_ooptdd_methodology_accepts_selector_gate_shape(tmp_path):
 def test_forbid_errors_fires_with_only_selector_rules_and_surfaces_to_report(monkeypatch):
     from ooptdd.backends.memory import MemoryBackend
     from ooptdd_loop.report import _check_miss
-    from ooptdd_loop.selector_gates import evaluate_gate
+    from ooptdd_loop.engine.selector_gates import evaluate_gate
 
     monkeypatch.setenv("OOPTDD_FORBID_ERRORS", "1")
     b = MemoryBackend()
@@ -196,7 +196,7 @@ def test_forbid_errors_fires_with_only_selector_rules_and_surfaces_to_report(mon
 
 def test_allow_errors_passthrough_through_wrapper(monkeypatch):
     from ooptdd.backends.memory import MemoryBackend
-    from ooptdd_loop.selector_gates import evaluate_gate
+    from ooptdd_loop.engine.selector_gates import evaluate_gate
 
     monkeypatch.setenv("OOPTDD_FORBID_ERRORS", "1")
     b = MemoryBackend()

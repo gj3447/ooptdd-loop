@@ -1,7 +1,10 @@
 """Render a RunResult for humans and for the next agent step."""
 from __future__ import annotations
 
-from .runner import RunResult
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # type-only — importing it at runtime would cycle with runner, which
+    from .runner import RunResult  # imports next_step_context lazily for the fix loop
 
 
 def _check_miss(c: dict) -> str:

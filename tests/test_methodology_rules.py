@@ -8,7 +8,7 @@ from ooptdd_loop.kg_seed import seed_cypher, seed_payload
 from ooptdd_loop.report import next_step_context
 from ooptdd_loop.runner import run_loop
 from ooptdd_loop.rules import canonical_rules
-from ooptdd_loop.spec import load_spec
+from ooptdd_loop.domain.spec import load_spec
 
 HERE = os.path.dirname(__file__)
 ROOT = os.path.dirname(HERE)

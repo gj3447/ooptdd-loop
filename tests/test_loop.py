@@ -6,7 +6,7 @@ import pytest
 from ooptdd.backends import memory_reset
 from ooptdd_loop.report import next_step_context, render
 from ooptdd_loop.runner import run_loop
-from ooptdd_loop.spec import load_spec
+from ooptdd_loop.domain.spec import load_spec
 
 HERE = os.path.dirname(__file__)
 ROOT = os.path.dirname(HERE)
