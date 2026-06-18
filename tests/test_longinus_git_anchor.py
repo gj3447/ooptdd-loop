@@ -13,8 +13,8 @@ import subprocess
 from types import SimpleNamespace
 
 from ooptdd_loop.kg import InMemoryKgStore
-from ooptdd_loop.longinus import ReferenceSite, git_identity, verify_binding
-from ooptdd_loop.spec import Longinus
+from ooptdd_loop.engine.longinus import ReferenceSite, git_identity, verify_binding
+from ooptdd_loop.domain.spec import Longinus
 
 
 def _git(cwd, *args):

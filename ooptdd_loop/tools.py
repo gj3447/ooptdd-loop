@@ -39,7 +39,7 @@ from .rules import (
     rule_checks_ok,
     rules_as_dicts,
 )
-from .spec import load_spec
+from .domain.spec import load_spec
 
 
 @dataclass
@@ -108,7 +108,7 @@ def t_run(spec: str, cid: str | None = None) -> dict:
 
 def t_validate_spec(spec: str) -> dict:
     s = load_spec(spec)
-    checks = evaluate_spec_rules(s)
+    checks = evaluate_spec_rules(s, root=s.target.root)
     return {
         "spec": s.name,
         "methodology": {"name": s.methodology.name, "enforce": s.methodology.enforce},
@@ -261,7 +261,7 @@ def t_golden_diff(
 
 
 def t_ontology_lookup(ontology: str, event_type: str) -> dict:
-    from ooptdd.ontology import Ontology
+    from ooptdd import Ontology  # public API
 
     et = Ontology.from_file(ontology).get(event_type)
     if et is None:

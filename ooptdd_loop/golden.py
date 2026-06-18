@@ -11,7 +11,7 @@ from typing import Any
 from ooptdd.backends import get_backend
 
 from .runner import _new_cid, evaluate_requirements, run_loop
-from .spec import Spec
+from .domain.spec import Spec
 
 SCHEMA_VERSION = "ooptdd.golden.v1"
 VOLATILE_EVENT_KEYS = {

@@ -5,7 +5,7 @@ import pytest
 from ooptdd.backends import get_backend, memory_reset
 from ooptdd_loop.local_capture import structlog_event_processor
 from ooptdd_loop.runner import run_loop
-from ooptdd_loop.spec import load_spec
+from ooptdd_loop.domain.spec import load_spec
 
 
 @pytest.fixture(autouse=True)

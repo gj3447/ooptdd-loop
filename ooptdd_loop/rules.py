@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Iterable
 
+from .engine.longinus import emission_kind
+
 
 @dataclass(frozen=True)
 class MethodologyRule:
@@ -161,11 +163,17 @@ def is_ooptdd_enabled(spec) -> bool:
     return spec.methodology.enforce or name.startswith("ooptdd")
 
 
-def evaluate_spec_rules(spec) -> list[RuleCheck]:
+def evaluate_spec_rules(spec, root: str | None = None) -> list[RuleCheck]:
     """Evaluate OOPTDD methodology rules against a loaded spec.
 
     Specs that do not opt in via ``methodology.name`` or ``methodology.enforce``
     keep legacy behavior and return no checks.
+
+    When ``root`` is given (the source root), the rules that *can* be answered from code
+    are answered from code — R04 inspects whether each bound symbol emits a **structured**
+    event (vs a free-text log line) and R06 checks the bound symbol is not a private helper
+    in source. Without ``root`` those rules fall back to their spec-shape form, so callers
+    that pass only a spec keep the previous behavior.
     """
     if not is_ooptdd_enabled(spec):
         return []
@@ -203,10 +211,19 @@ def evaluate_spec_rules(spec) -> list[RuleCheck]:
         spec.target.mode in {"in_process", "command", "pytest"},
         "engine mints and propagates OOPTDD_CID for in_process/command/pytest targets",
     )
+    # R04 spec-shape half: the declared gates must be structured (event/conforms/...).
+    # Code half (when root is known): the bound symbol must emit a *structured* event,
+    # not bury the event name in a free-text log line — analysed from the source AST.
+    free_text_reqs = []
+    if root:
+        for r in spec.requirements:
+            if r.longinus is not None and emission_kind(root, r.longinus) == "free_text":
+                free_text_reqs.append(r.id)
     add(
         "OOPTDD-R04",
-        _all_gates_structured(spec.requirements),
-        "free-text log assertions are not accepted; use event/conforms/must_order/select",
+        _all_gates_structured(spec.requirements) and not free_text_reqs,
+        "free-text log assertions are not accepted; use event/conforms/must_order/select"
+        + (f" (free-text emission in source: {free_text_reqs})" if free_text_reqs else ""),
     )
 
     backed_contracts = [
@@ -224,10 +241,17 @@ def evaluate_spec_rules(spec) -> list[RuleCheck]:
         if c.kind == "message_contract"
         and (not c.is_domain_message or c.message.startswith("_"))
     ]
+    # Code half: a requirement bound to a private helper symbol (``_foo``) is emitting from
+    # an implementation internal, not a domain message — forbid it on the source side too.
+    bad_private_syms = [
+        r.id for r in spec.requirements
+        if r.longinus is not None and r.longinus.symbol.startswith("_")
+    ]
     add(
         "OOPTDD-R06",
-        not bad_private,
-        f"private/non-domain message contracts are forbidden: {bad_private}",
+        not bad_private and not bad_private_syms,
+        f"private/non-domain message contracts are forbidden: {bad_private}"
+        + (f"; private bound symbols: {bad_private_syms}" if bad_private_syms else ""),
     )
 
     roles_ok = all(

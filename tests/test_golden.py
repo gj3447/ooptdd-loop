@@ -5,7 +5,7 @@ import pytest
 from ooptdd.backends import memory_reset
 from ooptdd_loop.cli import main
 from ooptdd_loop.golden import diff_golden, save_golden
-from ooptdd_loop.spec import load_spec
+from ooptdd_loop.domain.spec import load_spec
 from ooptdd_loop.tools import call
 
 
