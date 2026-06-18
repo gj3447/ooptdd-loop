@@ -19,7 +19,7 @@ from ooptdd.backends import get_backend
 from .report import next_step_context, render
 from .runner import _new_cid, evaluate_requirements
 from .otel import create_otel_recorder
-from .spec import load_spec
+from .domain.spec import load_spec
 
 PLUGIN_NAME = "ooptdd-loop-runtime"
 ENV_KEYS = (

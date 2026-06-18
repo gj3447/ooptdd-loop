@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from ooptdd.gate import evaluate as evaluate_ooptdd_gate
+from ooptdd import evaluate as evaluate_ooptdd_gate  # public API (engine.gate underneath)
 
 _OPS = {
     "==": operator.eq,

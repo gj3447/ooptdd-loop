@@ -79,6 +79,10 @@ class Target:
     ontology: str | None = None    # path (relative to root) to an event ontology yaml
     backend_options: dict = field(default_factory=dict)
     capture: dict = field(default_factory=dict)
+    #: optional shell command the fixpoint loop runs between RED passes to mutate the code
+    #: (e.g. an agent invocation). Receives the RCA on stdin and via OOPTDD_RCA/OOPTDD_CID.
+    #: Kept as a command, not an LLM binding, so generator≠verifier holds (see runner).
+    fix: str | None = None
 
 
 @dataclass
@@ -120,6 +124,7 @@ def load_spec(path: str) -> Spec:
         ontology=t.get("ontology"),
         backend_options=dict(t.get("backend_options", {})),
         capture=_capture_config(t.get("capture")),
+        fix=t.get("fix"),
     )
     methodology = Methodology(
         name=methodology_data.get("name", ""),

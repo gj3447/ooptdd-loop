@@ -18,7 +18,7 @@ from .report import next_step_context, render
 from .runner import run_until_complete
 from .kg_seed import seed_cypher, seed_payload, write_seed
 from .rules import rules_as_dicts
-from .spec import load_spec
+from .domain.spec import load_spec
 from .tools import (
     t_golden_diff,
     t_golden_save,
@@ -41,7 +41,9 @@ def _cmd_run(args) -> int:
     spec = load_spec(args.spec)
     store = _neo4j_store() if args.kg else None
     run = run_until_complete(spec, cid=args.cid, max_passes=args.passes,
-                             kg_write=args.kg_write, kg_store=store)
+                             kg_write=args.kg_write, kg_store=store,
+                             fix_cmd=args.fix, patience=args.patience,
+                             backoff_s=args.backoff)
     if args.json:
         payload = {
             "cid": run.cid,
@@ -49,6 +51,8 @@ def _cmd_run(args) -> int:
             "complete": run.complete,
             "done": run.n_done,
             "total": len(run.results),
+            "loop_reason": run.loop_reason,
+            "transcript": [dataclasses.asdict(p) for p in run.transcript],
             "requirements": [
                 {
                     "id": r.id,
@@ -286,7 +290,15 @@ def main(argv=None) -> int:
     r.add_argument("--kg-write", action="store_true", help="write Longinus ReferenceSites to KG")
     r.add_argument("--kg", action="store_true", help="persist the run (verdicts+sites) to Neo4j")
     r.add_argument("--json", action="store_true")
-    r.add_argument("--passes", type=int, default=1)
+    r.add_argument("--passes", type=int, default=1,
+                   help="max fixpoint iterations (run→fix→re-run)")
+    r.add_argument("--fix", default=None,
+                   help="shell command run between RED passes to edit the code "
+                        "(receives the RCA on stdin and via $OOPTDD_RCA); e.g. an agent")
+    r.add_argument("--patience", type=int, default=2,
+                   help="stop after this many consecutive no-progress passes (stall)")
+    r.add_argument("--backoff", type=float, default=0.0,
+                   help="seconds to sleep between passes (for async-ingest stores)")
     r.set_defaults(func=_cmd_run)
     rules = sub.add_parser("rules", help="print canonical OOPTDD methodology rules")
     rules.add_argument("--cypher", action="store_true", help="print KG seed Cypher")
