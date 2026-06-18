@@ -13,14 +13,29 @@ holds** (hard-core #3: KG is never a hard dependency):
 Node shape (both stores agree):
   OoptddRequirement {spec, id, description}
   OoptddVerdict     {cid, spec, requirement_id, gate_ok, reachable, bound, done}
-  ReferenceSite     {kg_anchor, sha256, sha256_baseline, ...}   (Longinus 7-tuple)
-Drift = ``sha256 != sha256_baseline`` (baseline set on first sight; current updated
-each run) — exactly the Longinus v3.3 baseline-drift definition.
+  ReferenceSite     {kg_anchor, sha256, sha256_baseline, blob_oid, blob_oid_baseline,
+                     commit, repo_relpath, ...}                 (Longinus 7-tuple)
+Drift = the anchor's content changed vs its baseline (baseline set on first sight,
+current updated each run). When the binding carries a git ``blob_oid`` (the
+content-addressed, machine-independent signal) drift is ``blob_oid != blob_oid_baseline``;
+otherwise it falls back to ``sha256 != sha256_baseline`` — the Longinus v3.3 definition.
+Anchoring on the git blob makes drift reproducible across clones: the baseline is tied
+to a real git object, not to one machine's working copy.
 """
 from __future__ import annotations
 
 import os
 from typing import Protocol, runtime_checkable
+
+
+def _drifted(s: dict) -> bool:
+    """Has this ReferenceSite's content moved off its baseline? Prefer the git
+    ``blob_oid`` (content-addressed, reproducible across clones) when both baseline and
+    current are present; otherwise fall back to the plain ``sha256`` baseline."""
+    bb, bc = s.get("blob_baseline"), s.get("blob_current")
+    if bb and bc:
+        return bc != bb
+    return s["current"] != s["baseline"]
 
 
 def _verdict_rows(cid: str, spec_name: str, results) -> list[dict]:
@@ -53,12 +68,20 @@ class InMemoryKgStore:
             b = getattr(r, "binding", None)
             if b is None or not getattr(b, "sha256", ""):
                 continue
+            blob = getattr(b, "blob_oid", None)
             cur = sites.get(b.kg_anchor)
             if cur is None:
-                sites[b.kg_anchor] = {"baseline": b.sha256, "current": b.sha256,
-                                      "source_path": b.source_path, "symbol": b.symbol}
+                sites[b.kg_anchor] = {
+                    "baseline": b.sha256, "current": b.sha256,
+                    "blob_baseline": blob, "blob_current": blob,
+                    "source_path": b.source_path, "symbol": b.symbol,
+                    "commit": getattr(b, "commit", None),
+                    "repo_relpath": getattr(b, "repo_relpath", None),
+                }
             else:
                 cur["current"] = b.sha256
+                cur["blob_current"] = blob
+                cur["commit"] = getattr(b, "commit", None)
 
     def coverage(self, spec_name: str) -> dict:
         runs = self._runs.get(spec_name) or []
@@ -73,10 +96,14 @@ class InMemoryKgStore:
     def drift(self, spec_name: str) -> list[dict]:
         out = []
         for anchor, s in (self._sites.get(spec_name) or {}).items():
-            if s["current"] != s["baseline"]:
+            if _drifted(s):
                 out.append({"kg_anchor": anchor, "source_path": s["source_path"],
                             "symbol": s["symbol"], "baseline": s["baseline"],
-                            "current": s["current"]})
+                            "current": s["current"],
+                            "blob_baseline": s.get("blob_baseline"),
+                            "blob_current": s.get("blob_current"),
+                            "commit": s.get("commit"),
+                            "repo_relpath": s.get("repo_relpath")})
         return out
 
 
@@ -101,7 +128,11 @@ class Neo4jKgStore:
         rows = _verdict_rows(cid, spec_name, results)
         sites = [
             {"kg_anchor": r.binding.kg_anchor, "sha256": r.binding.sha256,
-             "source_path": r.binding.source_path, "symbol": r.binding.symbol}
+             "source_path": r.binding.source_path, "symbol": r.binding.symbol,
+             "blob_oid": getattr(r.binding, "blob_oid", None),
+             "commit": getattr(r.binding, "commit", None),
+             "remote": getattr(r.binding, "remote", None),
+             "repo_relpath": getattr(r.binding, "repo_relpath", None)}
             for r in results if getattr(r, "binding", None) and r.binding.sha256
         ]
         with self._drv.session() as s:
@@ -115,9 +146,10 @@ class Neo4jKgStore:
             s.run(
                 """UNWIND $sites AS x
                    MERGE (rs:ReferenceSite:Longinus {kg_anchor:x.kg_anchor})
-                   ON CREATE SET rs.sha256_baseline=x.sha256
+                   ON CREATE SET rs.sha256_baseline=x.sha256, rs.blob_oid_baseline=x.blob_oid
                    SET rs.sha256=x.sha256, rs.source_path=x.source_path, rs.symbol=x.symbol,
-                       rs.last_validated=datetime()""", sites=sites)
+                       rs.blob_oid=x.blob_oid, rs.commit=x.commit, rs.remote=x.remote,
+                       rs.repo_relpath=x.repo_relpath, rs.last_validated=datetime()""", sites=sites)
 
     def coverage(self, spec_name: str) -> dict:
         with self._drv.session() as s:
@@ -135,9 +167,17 @@ class Neo4jKgStore:
                 "complete": rec["done"] == rec["total"], "incomplete": inc}
 
     def drift(self, spec_name: str) -> list[dict]:
+        # Prefer the git blob_oid (content-addressed, reproducible across clones) when both
+        # baseline and current exist; otherwise fall back to the sha256 baseline.
         with self._drv.session() as s:
             return [dict(r) for r in s.run(
-                """MATCH (rs:ReferenceSite) WHERE rs.sha256 <> rs.sha256_baseline
+                """MATCH (rs:ReferenceSite)
+                   WHERE (rs.blob_oid IS NOT NULL AND rs.blob_oid_baseline IS NOT NULL
+                          AND rs.blob_oid <> rs.blob_oid_baseline)
+                      OR ((rs.blob_oid IS NULL OR rs.blob_oid_baseline IS NULL)
+                          AND rs.sha256 <> rs.sha256_baseline)
                    RETURN rs.kg_anchor AS kg_anchor, rs.source_path AS source_path,
                           rs.symbol AS symbol, rs.sha256_baseline AS baseline,
-                          rs.sha256 AS current""")]
+                          rs.sha256 AS current, rs.blob_oid_baseline AS blob_baseline,
+                          rs.blob_oid AS blob_current, rs.commit AS commit,
+                          rs.repo_relpath AS repo_relpath""")]
