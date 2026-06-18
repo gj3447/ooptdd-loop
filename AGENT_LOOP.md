@@ -31,6 +31,11 @@ marked done when reality agrees.
 3. **`ooptdd-loop run` executes the code** and reads the store back. A requirement
    is GREEN only if its events actually arrived (positive arrival), and DONE only
    if it is also Longinus-bound to source that really exists and really emits them.
+   *Both wings count:* the good events must arrive **and** no forbidden event may —
+   an `absent:` rule (or the `OOPTDD_FORBID_ERRORS` default, which forbids
+   `ERROR`/`CRITICAL` records for the cid) turns a green-but-erroring cycle RED and
+   feeds the offending log lines back to the agent. Exempt known-benign ones with
+   `allow_errors:`.
 4. **RED comes back with a log-grounded RCA**, not a guess: what the store saw,
    what's missing, whether it's a missing event vs a count mismatch vs an
    unreachable store (which is `inconclusive`, never the code's fault).

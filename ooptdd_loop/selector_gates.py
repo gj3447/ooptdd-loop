@@ -44,6 +44,7 @@ def evaluate_gate(backend, spec: dict, *, ontology=None) -> dict:
     checks: list[dict] = []
     reachable = True
     queried: _Events | None = None
+    non_selector: list[dict] = []
 
     for rule in spec.get("expect", []):
         if _is_selector_rule(rule):
@@ -53,10 +54,21 @@ def evaluate_gate(backend, spec: dict, *, ontology=None) -> dict:
             checks.append(chk)
             reachable = reachable and queried.reachable
             continue
+        non_selector.append(rule)
 
-        out = evaluate_ooptdd_gate(backend, {"cid": cid, "expect": [rule]}, ontology=ontology)
-        checks.extend(out["checks"])
-        reachable = reachable and out["reachable"]
+    # Delegate ALL non-selector rules in ONE call so spec-level keys survive — notably
+    # `forbid_errors`/`allow_errors`/`error_levels` (the negative wing) and `indicators`/
+    # `threshold`. A per-rule sub-spec dropped them, which (a) re-injected the env
+    # error-forbid once per rule and (b) injected it ZERO times when every rule was a
+    # selector. One call fires the injection exactly once, even with no non-selector rules.
+    delegated = {k: spec[k] for k in (
+        "indicators", "threshold", "forbid_errors", "allow_errors", "error_levels",
+        "ontology", "timeWindow", "time_window") if k in spec}
+    delegated["cid"] = cid
+    delegated["expect"] = non_selector
+    out = evaluate_ooptdd_gate(backend, delegated, ontology=ontology)
+    checks.extend(out["checks"])
+    reachable = reachable and out["reachable"]
 
     gating = [c for c in checks if not c["optional"] and not c["pending"]]
     required_ok = all(c["passed"] for c in gating)
