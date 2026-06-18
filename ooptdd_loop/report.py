@@ -33,6 +33,20 @@ def _check_miss(c: dict) -> str:
         ev = first.get("event", "?")
         more = f" (+{len(viols) - 1} more)" if len(viols) > 1 else ""
         return f"conforms {c['conforms']} — {ev}: {probs}{more}"
+    if "absent" in c:
+        # the negative wing: forbidden events (e.g. ERROR-level logs) that DID occur.
+        # Surface the offenders so the agent gets the actual error logs, not just a count.
+        labels = ",".join(c["absent"])
+        offenders = c.get("offending") or []
+        if offenders:
+            shown = "; ".join(
+                str(o.get("error") or o.get("message") or o.get("event") or o)[:160]
+                for o in offenders[:3]
+            )
+            more = f" (+{c.get('violations', len(offenders)) - len(offenders[:3])} more)" \
+                if c.get("violations", 0) > 3 else ""
+            return f"forbidden [{labels}] — {c.get('violations')} occurred: {shown}{more}"
+        return f"forbidden [{labels}] — {c.get('violations')} occurred"
     if "must_order" in c:
         seq = ">".join(c["must_order"])
         if c.get("missing"):

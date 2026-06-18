@@ -171,3 +171,38 @@ def test_ooptdd_methodology_accepts_selector_gate_shape(tmp_path):
 
     assert out["ok"] is True
     assert out["ooptdd_enabled"] is True
+
+
+# ── negative wing: error-forbid flows through the selector wrapper + report ───
+def test_forbid_errors_fires_with_only_selector_rules_and_surfaces_to_report(monkeypatch):
+    from ooptdd.backends.memory import MemoryBackend
+    from ooptdd_loop.report import _check_miss
+    from ooptdd_loop.selector_gates import evaluate_gate
+
+    monkeypatch.setenv("OOPTDD_FORBID_ERRORS", "1")
+    b = MemoryBackend()
+    b.ship([{"cid": "c1", "event": "order_shipped"},
+            {"cid": "c1", "event": "decode", "level": "ERROR", "error": "ZDF boom"}])
+    # spec has ONLY a selector rule -> proves the env error-forbid now injects even when
+    # there are zero non-selector rules (the bug the wrapper batching fixed).
+    res = evaluate_gate(b, {"cid": "c1", "expect": [
+        {"select": {"event": "order_shipped"}, "op": ">=", "count": 1},
+    ]})
+    assert res["ok"] is False
+    absent = [c for c in res["checks"] if "absent" in c][0]
+    line = _check_miss(absent)
+    assert "forbidden" in line and "ZDF boom" in line  # the actual error reaches the agent
+
+
+def test_allow_errors_passthrough_through_wrapper(monkeypatch):
+    from ooptdd.backends.memory import MemoryBackend
+    from ooptdd_loop.selector_gates import evaluate_gate
+
+    monkeypatch.setenv("OOPTDD_FORBID_ERRORS", "1")
+    b = MemoryBackend()
+    b.ship([{"cid": "c1", "event": "order_shipped"},
+            {"cid": "c1", "event": "zdf.drop", "level": "ERROR", "error": "benign"}])
+    res = evaluate_gate(b, {"cid": "c1", "allow_errors": [{"event": "zdf.drop"}], "expect": [
+        {"select": {"event": "order_shipped"}, "op": ">=", "count": 1},
+    ]})
+    assert res["ok"] is True  # allowlist survived the wrapper delegation
