@@ -2,7 +2,8 @@
 
 Thin wrapper over :mod:`ooptdd_loop.tools`. The ``mcp`` SDK is an OPTIONAL
 dependency (extra ``mcp``); the registry itself is pure Python and works without
-it, so nothing here is on the offline path.
+it, so nothing here is on the offline path. ``logserver_*`` tools bridge to the
+upstream oo-mcp log server through ``OO_MCP_URL``.
 
     pip install ooptdd-loop[mcp]
     python -m ooptdd_loop.mcp_server          # stdio MCP server

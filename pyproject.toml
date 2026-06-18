@@ -17,11 +17,22 @@ dependencies = [
 [project.optional-dependencies]
 kg = ["neo4j>=5.0"]
 mcp = ["mcp>=1.0"]
-dev = ["pytest>=7.0", "ruff>=0.4"]
+otel = ["opentelemetry-api>=1.0"]
+xdist = ["pytest-xdist>=3.0"]
+dev = [
+  "pytest>=7.0",
+  "pytest-xdist>=3.0",
+  "opentelemetry-sdk>=1.0",
+  "ruff>=0.4",
+  "hypothesis>=6.0",
+]
 
 [project.scripts]
 ooptdd-loop = "ooptdd_loop.cli:main"
 ooptdd-loop-mcp = "ooptdd_loop.mcp_server:main"
+
+[project.entry-points.pytest11]
+ooptdd_loop = "ooptdd_loop.pytest_plugin"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ooptdd_loop"]
