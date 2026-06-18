@@ -31,6 +31,11 @@ marked done when reality agrees.
 3. **`ooptdd-loop run` executes the code** and reads the store back. A requirement
    is GREEN only if its events actually arrived (positive arrival), and DONE only
    if it is also Longinus-bound to source that really exists and really emits them.
+   *Both wings count:* the good events must arrive **and** no forbidden event may —
+   an `absent:` rule (or the `OOPTDD_FORBID_ERRORS` default, which forbids
+   `ERROR`/`CRITICAL` records for the cid) turns a green-but-erroring cycle RED and
+   feeds the offending log lines back to the agent. Exempt known-benign ones with
+   `allow_errors:`.
 4. **RED comes back with a log-grounded RCA**, not a guess: what the store saw,
    what's missing, whether it's a missing event vs a count mismatch vs an
    unreachable store (which is `inconclusive`, never the code's fault).
@@ -71,3 +76,16 @@ A minimal autonomous driver: run `--json`; if `complete` is false, hand the
 `requirements[].checks` + the stderr RCA to the dev agent as its next prompt;
 re-run after its edit; stop when `complete` is true. The loop is deterministic;
 only the dev step is the model.
+
+## Harness surface map
+
+- **Local coding harness (L_IDE)**: `ooptdd-loop run`, `validate-spec`, pytest,
+  `next_step_context`.
+- **Agent runtime harness (L_RT)**: `ooptdd-loop-mcp`, `ooptdd-loop mcp`, and
+  `ooptdd_loop.tools.call()` expose the loop as callable tools. `logserver_*`
+  tools bridge to the upstream `oo-mcp` log server for runtime evidence.
+- **Managed/control-plane harness (L_MC)**: KG seed, coverage, drift, and
+  Longinus ReferenceSites make completion and source drift queryable. RED RCA
+  reads log-server MCP `trace_cycle` first, then falls back to the local backend.
+
+Run `ooptdd-loop harness-profile --json` for the machine-readable map.

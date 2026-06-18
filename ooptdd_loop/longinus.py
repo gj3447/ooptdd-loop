@@ -39,6 +39,28 @@ def _find_symbol(tree: ast.AST, symbol: str):
     return None
 
 
+def _emits_literal(node: ast.AST, literal: str) -> bool:
+    """True iff ``literal`` appears inside a real string *constant* within ``node``'s
+    AST subtree.
+
+    AST-precise on purpose: a plain-text substring search (the old check) also matched
+    the literal when it appeared only in a comment or as part of an unrelated identifier
+    — both false GREENs that let an unbound symbol pass. Comments are absent from the AST
+    and identifiers are ``ast.Name`` nodes, so neither can satisfy this. The match is
+    containment (not equality) so a literal embedded in a larger message string — e.g.
+    ``logger.info(f"[BL] {n} cycle.done")`` — still counts, while ``cycle.done`` in
+    ``# emits cycle.done`` or in a variable named ``cycle_done`` does not.
+
+    (Python sources only — Longinus parses with stdlib ``ast``. For multi-language
+    binding, py-tree-sitter is the path; see the ooptdd-oss research seed
+    ``seed-ooptdd-longinus-treesitter-20260618``.)
+    """
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str) and literal in sub.value:
+            return True
+    return False
+
+
 def verify_binding(root: str, longinus) -> ReferenceSite:
     """Check that ``longinus.symbol`` exists in ``longinus.source`` and that its
     body references the ``must_emit`` event literal. Returns a ReferenceSite."""
@@ -59,13 +81,12 @@ def verify_binding(root: str, longinus) -> ReferenceSite:
         return ReferenceSite(longinus.kg_anchor, longinus.source, longinus.symbol,
                              None, sha, longinus.must_emit, False,
                              f"symbol '{longinus.symbol}' not defined in {longinus.source}")
-    seg = ast.get_source_segment(src, node) or ""
     line_range = (node.lineno, getattr(node, "end_lineno", node.lineno))
-    if longinus.must_emit not in seg:
+    if not _emits_literal(node, longinus.must_emit):
         return ReferenceSite(longinus.kg_anchor, longinus.source, longinus.symbol,
                              line_range, sha, longinus.must_emit, False,
                              f"'{longinus.symbol}' does not emit '{longinus.must_emit}' "
-                             "(event literal absent from its body)")
+                             "(event literal absent from its body as a string constant)")
     return ReferenceSite(longinus.kg_anchor, longinus.source, longinus.symbol,
                          line_range, sha, longinus.must_emit, True, "bound")
 

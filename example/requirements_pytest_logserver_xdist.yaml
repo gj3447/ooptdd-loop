@@ -1,0 +1,67 @@
+# Real pytest runtime pilot:
+#   OOPTDD pytest plugin + pytest-xdist + TRACEPARENT + OpenObserve readback.
+# Run through:
+#   scripts/real_backend_xdist_otel_pilot.sh
+name: ooptdd-pytest-logserver-xdist-pilot
+
+methodology:
+  name: OOPTDD_methodology_v1
+  enforce: true
+
+target:
+  mode: pytest
+  backend: openobserve
+  backend_options:
+    stream: ooptdd_demo
+  root: example
+
+contracts:
+  - id: MC-PYTEST-XDIST-WORKER-ONE
+    kind: message_contract
+    description: pytest xdist worker one emits real backend evidence.
+    role: PytestWorker
+    receiver: OpenObserve
+    message: pytest_xdist_worker_one_arrived
+    status: accepted
+    source_req: REQ-PYTEST-XDIST-WORKER-ONE
+    integration_backstop: REQ-PYTEST-XDIST-WORKER-ONE
+  - id: MC-PYTEST-XDIST-WORKER-TWO
+    kind: message_contract
+    description: pytest xdist worker two emits real backend evidence.
+    role: PytestWorker
+    receiver: OpenObserve
+    message: pytest_xdist_worker_two_arrived
+    status: accepted
+    source_req: REQ-PYTEST-XDIST-WORKER-TWO
+    integration_backstop: REQ-PYTEST-XDIST-WORKER-TWO
+
+requirements:
+  - id: REQ-PYTEST-XDIST-WORKER-ONE
+    kind: guiding
+    description: first xdist pytest event arrives in OpenObserve under the run cid
+    covers: [MC-PYTEST-XDIST-WORKER-ONE]
+    gate:
+      - event: pytest_xdist_worker_one_arrived
+        where: {service: ooptdd-pytest-xdist-pilot}
+        op: "=="
+        count: 1
+    longinus:
+      kg_anchor: ref_site:ooptdd:pytest_xdist_logserver_worker_one
+      source: pytest_logserver_xdist_app.py
+      symbol: emit_worker_one
+      must_emit: pytest_xdist_worker_one_arrived
+
+  - id: REQ-PYTEST-XDIST-WORKER-TWO
+    kind: guiding
+    description: second xdist pytest event arrives in OpenObserve under the run cid
+    covers: [MC-PYTEST-XDIST-WORKER-TWO]
+    gate:
+      - event: pytest_xdist_worker_two_arrived
+        where: {service: ooptdd-pytest-xdist-pilot}
+        op: "=="
+        count: 1
+    longinus:
+      kg_anchor: ref_site:ooptdd:pytest_xdist_logserver_worker_two
+      source: pytest_logserver_xdist_app.py
+      symbol: emit_worker_two
+      must_emit: pytest_xdist_worker_two_arrived
