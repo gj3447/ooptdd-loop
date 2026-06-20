@@ -178,10 +178,14 @@ def evaluate_requirements(spec: Spec, *, cid: str, backend=None, kg_write: bool 
 
 
 def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False,
-             kg_store=None) -> RunResult:
+             kg_store=None, produce: bool = True) -> RunResult:
     cid = cid or os.getenv("OOPTDD_CID") or _new_cid()
     backend = get_backend(spec.target.backend, **spec.target.backend_options)
-    _produce_logs(spec, backend, cid)
+    if produce:
+        # ``produce=False`` re-evaluates already-shipped logs without re-running the system
+        # under test — used by run_until_complete for every pass after the first, so a stable
+        # cid is not re-shipped (see there).
+        _produce_logs(spec, backend, cid)
     return evaluate_requirements(
         spec,
         cid=cid,
@@ -193,12 +197,18 @@ def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False,
 
 def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 1,
                        kg_write: bool = False, kg_store=None):
-    """Run the loop up to ``max_passes`` times (the code does not change between
-    passes — re-runs only help with async-ingest latency on networked backends).
-    Returns the final RunResult."""
+    """Run the loop up to ``max_passes`` times (the code does not change between passes).
+
+    The system under test is run **once**; the extra passes only RE-QUERY the store, to give a
+    networked backend time for async ingest to land. Re-running the target every pass would
+    re-ship every event — and against an in-process store with a stable cid that doubles the
+    counts and flips exact-count gates (``op: ==``) from GREEN to RED on correct code. The cid
+    is therefore minted once here and held fixed across passes (a fresh cid per pass would make
+    the no-produce passes query an empty stream). Returns the final RunResult."""
+    cid = cid or os.getenv("OOPTDD_CID") or _new_cid()
     last = None
-    for _ in range(max(max_passes, 1)):
-        last = run_loop(spec, cid=cid, kg_write=kg_write, kg_store=kg_store)
+    for i in range(max(max_passes, 1)):
+        last = run_loop(spec, cid=cid, kg_write=kg_write, kg_store=kg_store, produce=(i == 0))
         if last.complete:
             break
         time.sleep(0.0)
