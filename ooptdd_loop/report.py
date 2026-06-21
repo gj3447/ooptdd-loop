@@ -84,6 +84,10 @@ def render(run: RunResult) -> str:
                     lines.append("     gate miss: " + _check_miss(c))
         if r.binding is not None and not r.binding.bound:
             lines.append(f"     longinus: {r.binding.reason}")
+    charge = getattr(run, "charge", None)
+    if charge is not None and charge.enabled:
+        lines.append("")
+        lines.append(charge.summary())
     return "\n".join(lines)
 
 
