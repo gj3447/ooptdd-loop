@@ -19,12 +19,14 @@ kg = ["neo4j>=5.0"]
 mcp = ["mcp>=1.0"]
 otel = ["opentelemetry-api>=1.0"]
 xdist = ["pytest-xdist>=3.0"]
+charge = ["coverage>=7.0"]  # L6 execution-path (charge) coverage; OOPTDD_CHARGE_COVERAGE=1
 dev = [
   "pytest>=7.0",
   "pytest-xdist>=3.0",
   "opentelemetry-sdk>=1.0",
   "ruff>=0.4",
   "hypothesis>=6.0",
+  "coverage>=7.0",
 ]
 
 [project.scripts]
