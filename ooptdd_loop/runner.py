@@ -41,14 +41,30 @@ class ReqResult:
     checks: list[dict]
     binding: ReferenceSite | None
     rca: str | None = None
+    require_binding: bool = False
+    waiver: str | None = None
+    min_mutation_score: float | None = None
+    mutation_score: float | None = None
 
     @property
     def bound(self) -> bool:
-        return self.binding is None or self.binding.bound
+        if self.binding is not None:
+            return self.binding.bound
+        # No Longinus binding declared. The old default (missing -> bound=True) let
+        # done = gate-green + bound-by-OMISSION slip through. Under enforcement, a missing
+        # binding is NOT bound unless an explicit `binding_waiver` acknowledges the gap.
+        return (not self.require_binding) or bool(self.waiver)
+
+    @property
+    def mutation_ok(self) -> bool:
+        # A discriminating-power floor: a green gate that a mutant also passes is too weak.
+        # Skipped when unconfigured, or when no baseline could be established (score None).
+        return (self.min_mutation_score is None or self.mutation_score is None
+                or self.mutation_score >= self.min_mutation_score)
 
     @property
     def done(self) -> bool:
-        return self.gate_ok and self.bound
+        return self.gate_ok and self.bound and self.mutation_ok
 
 
 @dataclass
@@ -155,15 +171,33 @@ def evaluate_requirements(spec: Spec, *, cid: str, backend=None, kg_write: bool 
         backend=spec.target.backend,
         methodology_checks=evaluate_spec_rules(spec),
     )
+    # Enforcement knobs (both opt-in, default OFF). require_binding: a requirement with no
+    # Longinus binding is NOT done unless waived. min_mutation: a green gate must also DISCRIMINATE
+    # (its mutation score >= the floor) — rewards strong gates, not green theater.
+    require_binding = bool(os.getenv("OOPTDD_REQUIRE_BINDING")) or spec.methodology.enforce
+    _mm = os.getenv("OOPTDD_MIN_MUTATION_SCORE")
+    min_mutation = float(_mm) if _mm else None
     for req in spec.requirements:
         gate_spec = {"cid": cid, "expect": req.gate}
         ev = evaluate_gate(backend, gate_spec, ontology=ontology)
         binding = (
             verify_binding(spec.target.root, req.longinus) if req.longinus else None
         )
+        mutation_score = None
+        if min_mutation is not None and ev["ok"] and req.gate:
+            try:  # mutation is an optional discriminating-power gate — never crash the loop
+                from ooptdd.mutation import mutation_report
+
+                from .selector_gates import _query_events
+                rep = mutation_report(_query_events(backend, cid).events, gate_spec)
+                mutation_score = rep["score"] if rep.get("baseline_green") else None
+            except Exception:  # noqa: BLE001
+                mutation_score = None
         rr = ReqResult(
             id=req.id, description=req.description, gate_ok=ev["ok"],
             reachable=ev["reachable"], checks=ev["checks"], binding=binding,
+            require_binding=require_binding, waiver=req.extras.get("binding_waiver"),
+            min_mutation_score=min_mutation, mutation_score=mutation_score,
         )
         if not rr.done:
             rr.rca = rca_block(backend, cid, mode=spec.target.backend,
