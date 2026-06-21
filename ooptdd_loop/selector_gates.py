@@ -71,9 +71,14 @@ def evaluate_gate(backend, spec: dict, *, ontology=None) -> dict:
     reachable = reachable and out["reachable"]
 
     gating = [c for c in checks if not c["optional"] and not c["pending"]]
-    required_ok = all(c["passed"] for c in gating)
+    # A gate with NO checks at all asserts nothing — `all([])` is vacuously True, so an empty
+    # `gate: []` (or a YAML typo that nested the expectations under the wrong key) would report
+    # GREEN/DONE for a requirement that proves nothing arrived. That is the exact false-GREEN
+    # this loop exists to kill, so a check-less gate is never a clean pass.
+    required_ok = bool(checks) and all(c["passed"] for c in gating)
     return {
         "ok": reachable and required_ok,
+        "empty": not checks,
         "reachable": reachable,
         "cid": cid,
         "checks": checks,

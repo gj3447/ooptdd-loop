@@ -22,10 +22,14 @@ import time
 import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ooptdd.backends import get_backend
 
 from .selector_gates import evaluate_gate, selector_event_names
+
+if TYPE_CHECKING:
+    from .charge_coverage import ChargeReport
 from .longinus import ReferenceSite, verify_binding, write_to_kg
 from .oo_rca import rca_block
 from .rules import RuleCheck, evaluate_spec_rules, rule_checks_ok
@@ -41,14 +45,30 @@ class ReqResult:
     checks: list[dict]
     binding: ReferenceSite | None
     rca: str | None = None
+    require_binding: bool = False
+    waiver: str | None = None
+    min_mutation_score: float | None = None
+    mutation_score: float | None = None
 
     @property
     def bound(self) -> bool:
-        return self.binding is None or self.binding.bound
+        if self.binding is not None:
+            return self.binding.bound
+        # No Longinus binding declared. The old default (missing -> bound=True) let
+        # done = gate-green + bound-by-OMISSION slip through. Under enforcement, a missing
+        # binding is NOT bound unless an explicit `binding_waiver` acknowledges the gap.
+        return (not self.require_binding) or bool(self.waiver)
+
+    @property
+    def mutation_ok(self) -> bool:
+        # A discriminating-power floor: a green gate that a mutant also passes is too weak.
+        # Skipped when unconfigured, or when no baseline could be established (score None).
+        return (self.min_mutation_score is None or self.mutation_score is None
+                or self.mutation_score >= self.min_mutation_score)
 
     @property
     def done(self) -> bool:
-        return self.gate_ok and self.bound
+        return self.gate_ok and self.bound and self.mutation_ok
 
 
 @dataclass
@@ -57,6 +77,10 @@ class RunResult:
     backend: str
     results: list[ReqResult] = field(default_factory=list)
     methodology_checks: list[RuleCheck] = field(default_factory=list)
+    # L6 execution-path (charge) coverage — advisory, never affects ``complete``. None on the
+    # CI/harness path (logs already produced, nothing measured); a disabled report when the env
+    # flag is off or coverage.py is absent; a populated report when measurement ran.
+    charge: ChargeReport | None = None
 
     @property
     def methodology_ok(self) -> bool:
@@ -92,8 +116,14 @@ def _want_events(gate: list[dict]) -> list[str]:
     return want
 
 
-def _produce_logs(spec: Spec, backend, cid: str) -> None:
-    """Run the system under test so it emits events under ``cid``."""
+def _produce_logs(spec: Spec, backend, cid: str):
+    """Run the system under test so it emits events under ``cid``.
+
+    Returns the charge-coverage controller for the run (a no-op one unless ``OOPTDD_CHARGE_COVERAGE``
+    is set and coverage.py is installed), so the caller can build the advisory L6 report.
+    """
+    from .charge_coverage import _NullController, coverage_session
+
     t = spec.target
     if t.mode == "in_process":
         if not t.callable:
@@ -116,13 +146,17 @@ def _produce_logs(spec: Spec, backend, cid: str) -> None:
                 level=capture.get("level", "INFO"),
                 service=capture.get("service"),
             )
-        with capture_ctx:
-            getattr(mod, fn)(backend, cid)
+        # Measure the target's entry module while it runs; emit sites elsewhere are out of scope.
+        with coverage_session([getattr(mod, "__file__", None)]) as charge:
+            with capture_ctx:
+                getattr(mod, fn)(backend, cid)
+        return charge
     elif t.mode == "command":
         if not t.command:
             raise ValueError("command target needs `command:`")
         env = {**os.environ, "OOPTDD_CID": cid, "OOPTDD_BACKEND": t.backend}
         subprocess.run(t.command, shell=True, env=env, check=False)
+        return _NullController(note="command-mode target not measured (runs in a subprocess)")
     else:
         raise ValueError(f"unknown target mode {t.mode!r}")
 
@@ -141,7 +175,7 @@ def _load_ontology(spec: Spec):
 
 
 def evaluate_requirements(spec: Spec, *, cid: str, backend=None, kg_write: bool = False,
-                          kg_store=None) -> RunResult:
+                          kg_store=None, charge=None) -> RunResult:
     """Evaluate gates and Longinus bindings for logs that already exist.
 
     This is the pytest/CI harness path: the test session produced events under
@@ -155,15 +189,33 @@ def evaluate_requirements(spec: Spec, *, cid: str, backend=None, kg_write: bool 
         backend=spec.target.backend,
         methodology_checks=evaluate_spec_rules(spec),
     )
+    # Enforcement knobs (both opt-in, default OFF). require_binding: a requirement with no
+    # Longinus binding is NOT done unless waived. min_mutation: a green gate must also DISCRIMINATE
+    # (its mutation score >= the floor) — rewards strong gates, not green theater.
+    require_binding = bool(os.getenv("OOPTDD_REQUIRE_BINDING")) or spec.methodology.enforce
+    _mm = os.getenv("OOPTDD_MIN_MUTATION_SCORE")
+    min_mutation = float(_mm) if _mm else None
     for req in spec.requirements:
         gate_spec = {"cid": cid, "expect": req.gate}
         ev = evaluate_gate(backend, gate_spec, ontology=ontology)
         binding = (
             verify_binding(spec.target.root, req.longinus) if req.longinus else None
         )
+        mutation_score = None
+        if min_mutation is not None and ev["ok"] and req.gate:
+            try:  # mutation is an optional discriminating-power gate — never crash the loop
+                from ooptdd.mutation import mutation_report
+
+                from .selector_gates import _query_events
+                rep = mutation_report(_query_events(backend, cid).events, gate_spec)
+                mutation_score = rep["score"] if rep.get("baseline_green") else None
+            except Exception:  # noqa: BLE001
+                mutation_score = None
         rr = ReqResult(
             id=req.id, description=req.description, gate_ok=ev["ok"],
             reachable=ev["reachable"], checks=ev["checks"], binding=binding,
+            require_binding=require_binding, waiver=req.extras.get("binding_waiver"),
+            min_mutation_score=min_mutation, mutation_score=mutation_score,
         )
         if not rr.done:
             rr.rca = rca_block(backend, cid, mode=spec.target.backend,
@@ -171,6 +223,17 @@ def evaluate_requirements(spec: Spec, *, cid: str, backend=None, kg_write: bool 
         elif kg_write and binding is not None:
             write_to_kg(binding, cycle_id=cid)
         run.results.append(rr)
+    if charge is not None:
+        # L6 advisory: which executed emit sites never reached the store. Pure reporting —
+        # build it from the full arrived trace, independent of any single gate's shape.
+        from .charge_coverage import build_charge_report
+
+        from .selector_gates import _query_events
+        try:
+            observed = _query_events(backend, cid).events
+        except Exception:  # noqa: BLE001 — the advisory must never break evaluation
+            observed = []
+        run.charge = build_charge_report(charge, observed)
     if kg_store is not None:
         # KG-native I/O: persist the run so coverage/drift become queries (V2)
         kg_store.write_run(cid, spec.name, run.results)
@@ -178,27 +241,39 @@ def evaluate_requirements(spec: Spec, *, cid: str, backend=None, kg_write: bool 
 
 
 def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False,
-             kg_store=None) -> RunResult:
+             kg_store=None, produce: bool = True) -> RunResult:
     cid = cid or os.getenv("OOPTDD_CID") or _new_cid()
     backend = get_backend(spec.target.backend, **spec.target.backend_options)
-    _produce_logs(spec, backend, cid)
+    charge = None
+    if produce:
+        # ``produce=False`` re-evaluates already-shipped logs without re-running the system
+        # under test — used by run_until_complete for every pass after the first, so a stable
+        # cid is not re-shipped (see there).
+        charge = _produce_logs(spec, backend, cid)
     return evaluate_requirements(
         spec,
         cid=cid,
         backend=backend,
         kg_write=kg_write,
         kg_store=kg_store,
+        charge=charge,
     )
 
 
 def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 1,
                        kg_write: bool = False, kg_store=None):
-    """Run the loop up to ``max_passes`` times (the code does not change between
-    passes — re-runs only help with async-ingest latency on networked backends).
-    Returns the final RunResult."""
+    """Run the loop up to ``max_passes`` times (the code does not change between passes).
+
+    The system under test is run **once**; the extra passes only RE-QUERY the store, to give a
+    networked backend time for async ingest to land. Re-running the target every pass would
+    re-ship every event — and against an in-process store with a stable cid that doubles the
+    counts and flips exact-count gates (``op: ==``) from GREEN to RED on correct code. The cid
+    is therefore minted once here and held fixed across passes (a fresh cid per pass would make
+    the no-produce passes query an empty stream). Returns the final RunResult."""
+    cid = cid or os.getenv("OOPTDD_CID") or _new_cid()
     last = None
-    for _ in range(max(max_passes, 1)):
-        last = run_loop(spec, cid=cid, kg_write=kg_write, kg_store=kg_store)
+    for i in range(max(max_passes, 1)):
+        last = run_loop(spec, cid=cid, kg_write=kg_write, kg_store=kg_store, produce=(i == 0))
         if last.complete:
             break
         time.sleep(0.0)
