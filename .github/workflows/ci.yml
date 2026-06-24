@@ -1,0 +1,62 @@
+name: ci
+
+# Build-gate for ooptdd-loop. Mirrors gj3447/ooptdd's CI style (setup-python + pip install
+# + ruff + pytest), promoting the dogfooded positive-TDD/LTDD loop from "run pytest manually" to an
+# ENFORCED gate.
+#
+# ── ooptdd is a HARD, MANDATORY dependency (dependencies=["ooptdd>=0.2.0"]), private + not on PyPI ──
+# Unlike omd, this suite CANNOT degrade: without ooptdd it fails at import/collection. So CI MUST
+# install the private sibling, which requires a secret. This job fails FAST with a readable message
+# when the secret is missing — so a red X has an obvious cause, not a confusing pip resolution error.
+#
+#   ONE-TIME SECRET SETUP (repo gj3447/ooptdd-loop):
+#     1. Create a fine-grained PAT (github.com → Settings → Developer settings → Fine-grained tokens)
+#        with Repository access = gj3447/ooptdd and Repository permissions → Contents: Read-only.
+#     2. In this repo: Settings → Secrets and variables → Actions → New repository secret
+#        Name:  WORKSPACE_PAT
+#        Value: <the PAT>
+#   Without WORKSPACE_PAT this CI is RED by design (ooptdd is mandatory and unresolvable).
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Require WORKSPACE_PAT (ooptdd is a mandatory private sibling dep)
+        # Fail fast with a clear message so a red X is self-explanatory rather than a cryptic pip error.
+        env:
+          WORKSPACE_PAT: ${{ secrets.WORKSPACE_PAT }}
+        run: |
+          if [ -z "$WORKSPACE_PAT" ]; then
+            echo "::error::WORKSPACE_PAT secret is not set. ooptdd-loop depends on the PRIVATE sibling"
+            echo "::error::repo gj3447/ooptdd (not on PyPI), so CI cannot install dependencies."
+            echo "::error::Fix: add a fine-grained PAT with Contents:Read on gj3447/ooptdd as the"
+            echo "::error::repo secret WORKSPACE_PAT (see the header comment in .github/workflows/ci.yml)."
+            exit 1
+          fi
+      - name: Install ooptdd (mandatory private sibling)
+        env:
+          WORKSPACE_PAT: ${{ secrets.WORKSPACE_PAT }}
+        run: |
+          pip install "ooptdd @ git+https://x-access-token:${WORKSPACE_PAT}@github.com/gj3447/ooptdd.git@main"
+      - name: Install ooptdd-loop + dev extras
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check .
+      - name: Test
+        run: pytest -q
