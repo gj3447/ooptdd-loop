@@ -18,7 +18,7 @@ makes wrong development *detectable and self-correcting*, not impossible — the
 honest version of "it can't go wrong".
 """
 from .rules import canonical_rules
-from .spec import Contract, Methodology, Requirement, load_spec
+from .domain.spec import Contract, Methodology, Requirement, load_spec
 from .runner import RunResult, evaluate_requirements, run_loop
 from .tools import call, list_tools
 from .golden import diff_golden, save_golden

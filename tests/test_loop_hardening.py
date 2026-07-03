@@ -11,8 +11,8 @@ from __future__ import annotations
 from ooptdd.backends import MemoryBackend, memory_reset
 
 from ooptdd_loop import runner
-from ooptdd_loop.selector_gates import evaluate_gate
-from ooptdd_loop.spec import Requirement, Spec, Target
+from ooptdd_loop.engine.selector_gates import evaluate_gate
+from ooptdd_loop.domain.spec import Requirement, Spec, Target
 
 
 def test_empty_gate_asserts_nothing_and_is_not_green():

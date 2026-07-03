@@ -5,7 +5,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from ooptdd_loop import golden
-from ooptdd_loop.selector_gates import evaluate_gate
+from ooptdd_loop.engine.selector_gates import evaluate_gate
 
 EVENT_NAMES = ("order_received", "payment_authorized", "order_shipped", "fraud_checked")
 SERVICES = ("web", "billing", "fulfillment", "fraud")

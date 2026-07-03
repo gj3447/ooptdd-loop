@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from ooptdd.backends import memory_reset
 from ooptdd_loop.kg import InMemoryKgStore
 from ooptdd_loop.runner import run_loop
-from ooptdd_loop.spec import load_spec
+from ooptdd_loop.domain.spec import load_spec
 
 import pytest
 

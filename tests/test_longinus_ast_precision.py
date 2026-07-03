@@ -11,8 +11,8 @@ From the ooptdd-oss prometheus cycle (A9, seed-ooptdd-longinus-treesitter-202606
 """
 from __future__ import annotations
 
-from ooptdd_loop.longinus import verify_binding
-from ooptdd_loop.spec import Longinus
+from ooptdd_loop.engine.longinus import verify_binding
+from ooptdd_loop.domain.spec import Longinus
 
 
 def _write(tmp_path, body: str) -> str:
