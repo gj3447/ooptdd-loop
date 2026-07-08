@@ -16,6 +16,7 @@ from .domain.spec import Spec
 SCHEMA_VERSION = "ooptdd.golden.v1"
 VOLATILE_EVENT_KEYS = {
     "_timestamp",
+    "_seq",
     "cid",
     "correlation_id",
     "cycle_id",
