@@ -14,6 +14,9 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 
+# ZeroTier route (10.147.17.x) — the Tailscale route (localhost) is offline on
+# this box, so the ZT address is the reachable path to the same openobserve-logs
+# MCP server (port 55014, same endpoint logs-host uses). Override via OO_MCP_URL.
 DEFAULT_OO_MCP_URL = "http://localhost:55014/mcp"
 PROTOCOL_VERSION = "2025-03-26"
 HEADERS = {
