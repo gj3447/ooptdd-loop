@@ -63,7 +63,11 @@ def evaluate_gate(backend, spec: dict, *, ontology=None) -> dict:
     # selector. One call fires the injection exactly once, even with no non-selector rules.
     delegated = {k: spec[k] for k in (
         "indicators", "threshold", "forbid_errors", "allow_errors", "error_levels",
-        "ontology", "timeWindow", "time_window") if k in spec}
+        "ontology", "timeWindow", "time_window",
+        # #7 companion: forward spec-authored enforcement so a `require_signature: true` /
+        # `require_corroboration: true` in the YAML actually reaches upstream (previously only
+        # the OOPTDD_REQUIRE_* env vars did, so a spec-level opt-in was silently dropped).
+        "require_signature", "require_corroboration") if k in spec}
     delegated["cid"] = cid
     delegated["expect"] = non_selector
     out = evaluate_ooptdd_gate(backend, delegated, ontology=ontology)
@@ -71,13 +75,21 @@ def evaluate_gate(backend, spec: dict, *, ontology=None) -> dict:
     reachable = reachable and out["reachable"]
 
     gating = [c for c in checks if not c["optional"] and not c["pending"]]
-    # A gate with NO checks at all asserts nothing — `all([])` is vacuously True, so an empty
-    # `gate: []` (or a YAML typo that nested the expectations under the wrong key) would report
-    # GREEN/DONE for a requirement that proves nothing arrived. That is the exact false-GREEN
-    # this loop exists to kill, so a check-less gate is never a clean pass.
-    required_ok = bool(checks) and all(c["passed"] for c in gating)
+    # A gate must assert something that can FAIL to be a clean pass. `bool(gating)` (NOT
+    # `bool(checks)`) is the guard: an empty `gate: []` AND a gate whose every check is
+    # optional/pending both have zero GATING checks — `all([])` is vacuously True, so either
+    # reports GREEN while proving nothing. Marking every rule optional/pending is the agent-loop's
+    # free "weaken to win" move and must not be a clean pass, exactly like the empty gate.
+    required_ok = bool(gating) and all(c["passed"] for c in gating)
+    # #7: require_signature / require_corroboration failures surface on the upstream result as the
+    # top-level bools `unauthenticated` / `uncorroborated` (NOT as a check in out["checks"]), so
+    # merging only out["checks"] silently drops them. Veto on exactly those two: they are True ONLY
+    # on a genuine enforcement failure (asserts_anything AND the required signature/corroboration
+    # was absent) and are False for a vacuous/empty delegation — so unlike ANDing out["ok"] (always
+    # False for a selector-only delegation) this never re-breaks an honest selector-only spec.
+    enforcement_failed = bool(out.get("unauthenticated")) or bool(out.get("uncorroborated"))
     return {
-        "ok": reachable and required_ok,
+        "ok": reachable and required_ok and not enforcement_failed,
         "empty": not checks,
         "reachable": reachable,
         "cid": cid,

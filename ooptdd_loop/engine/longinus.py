@@ -124,14 +124,24 @@ def _find_symbol(tree: ast.AST, symbol: str):
 
 
 def _emit_line(node: ast.AST, literal: str) -> int | None:
-    """Line of the first string *constant* inside ``node`` containing ``literal`` (None if
-    none). AST-precise: comments are absent from the AST and identifiers are ``ast.Name``
-    nodes, so neither can satisfy this — only a real string literal does. Containment (not
-    equality) so a literal embedded in a larger message string still counts (e.g.
-    ``logger.info(f"[BL] {n} cycle.done")``), while ``cycle.done`` in a comment or in a
-    variable named ``cycle_done`` does not."""
+    """Line of the first *executable* string constant inside ``node`` containing ``literal``
+    (None if none). AST-precise: comments are absent from the AST and identifiers are
+    ``ast.Name`` nodes, so neither can satisfy this. A string constant that is the whole
+    *value* of an expression statement (``ast.Expr``) is excluded too: that is a docstring
+    or a dead bare-string literal — it has no runtime effect and so can never emit. This
+    shuts the forgery "emit the event somewhere unreachable, then just name it in the
+    claimed symbol's docstring". Containment (not equality) so a literal embedded in a larger
+    message string still counts (e.g. ``logger.info(f"[BL] {n} cycle.done")``), while
+    ``cycle.done`` in a comment, a docstring, or a variable named ``cycle_done`` does not."""
+    # docstrings + dead bare-string statements: value of an Expr, zero runtime effect.
+    dead = {
+        id(s.value) for s in ast.walk(node)
+        if isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant)
+        and isinstance(s.value.value, str)
+    }
     for sub in ast.walk(node):
-        if isinstance(sub, ast.Constant) and isinstance(sub.value, str) and literal in sub.value:
+        if (isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+                and literal in sub.value and id(sub) not in dead):
             return getattr(sub, "lineno", None)
     return None
 
