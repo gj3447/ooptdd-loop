@@ -9,6 +9,7 @@ the same registry over MCP so Claude/Codex call these natively (mirrors oo-mcp).
 Tools:
   list_requirements(spec)            what a spec declares
   run(spec[, cid])                   run the loop; verdict + next-step context
+  watch_tick(spec, cid[, produce])   one-shot incremental re-judgment of a cid
   validate_spec(spec)                static OOPTDD methodology checks, no execution
   methodology_rules()                canonical OOPTDD rules
   kg_seed()                          idempotent KG seed Cypher + params
@@ -102,6 +103,22 @@ def t_run(spec: str, cid: str | None = None) -> dict:
 
     run = run_loop(load_spec(spec), cid=cid)
     payload = _run_payload(run)
+    payload["next_step"] = next_step_context(run)   # empty when complete
+    return payload
+
+
+def t_watch_tick(spec: str, cid: str, produce: bool = False) -> dict:
+    """One-shot watch tick — the MCP-safe (non-looping) form of ``ooptdd-loop watch``.
+
+    MCP is synchronous request/response, so the infinite watch loop cannot be a tool;
+    this re-judges the events already shipped under ``cid`` (``produce=False``, the
+    ``--attach`` semantic: call again as more events arrive) or runs the target first
+    under that cid (``produce=True``). kg_write/kg_store stay off — repeat-safe."""
+    from .runner import run_loop
+    from .watch import run_payload
+
+    run = run_loop(load_spec(spec), cid=cid, produce=produce)
+    payload = run_payload(run)
     payload["next_step"] = next_step_context(run)   # empty when complete
     return payload
 
@@ -291,6 +308,15 @@ TOOLS: list[Tool] = [
          {"spec": {"type": "string", "required": True, "desc": "path to a spec yaml"},
           "cid": {"type": "string", "required": False, "desc": "correlation id (optional)"}},
          t_run),
+    Tool("watch_tick", "One-shot watch tick: re-judge the events already shipped under a cid "
+                       "(produce=false, incremental — call again as events arrive), or run the "
+                       "target first under that cid (produce=true). Non-looping MCP form of "
+                       "`ooptdd-loop watch`.",
+         {"spec": {"type": "string", "required": True, "desc": "path to a spec yaml"},
+          "cid": {"type": "string", "required": True, "desc": "correlation id to (re-)judge"},
+          "produce": {"type": "boolean", "required": False,
+                      "desc": "run the target under this cid before judging (default false)"}},
+         t_watch_tick),
     Tool("validate_spec", "Validate OOPTDD methodology rules without running the system.",
          {"spec": {"type": "string", "required": True, "desc": "path to a spec yaml"}},
          t_validate_spec),

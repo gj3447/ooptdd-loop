@@ -78,6 +78,12 @@ def _cmd_run(args) -> int:
     return 0 if run.complete else 1
 
 
+def _cmd_watch(args) -> int:
+    from .watch import watch_command  # lazy: the hot `run` path never pays for it
+
+    return watch_command(args)
+
+
 def _cmd_rules(args) -> int:
     if args.cypher:
         print(seed_cypher())
@@ -300,6 +306,23 @@ def main(argv=None) -> int:
     r.add_argument("--backoff", type=float, default=0.0,
                    help="seconds to sleep between passes (for async-ingest stores)")
     r.set_defaults(func=_cmd_run)
+    w = sub.add_parser("watch", help="live harness: re-run on file change, re-judge as events arrive")
+    w.add_argument("spec")
+    w.add_argument("--cid",
+                   help="run mode: the first run's cid (re-runs mint fresh cids); "
+                        "attach mode: the pinned cid to re-judge (or $OOPTDD_CID)")
+    w.add_argument("--attach", action="store_true",
+                   help="never run the target — incrementally re-judge events an external "
+                        "process ships under --cid (cross-process needs a jsonl/openobserve store)")
+    w.add_argument("--interval", type=float, default=0.5, help="poll interval in seconds")
+    w.add_argument("--until-complete", action="store_true",
+                   help="exit 0 as soon as every requirement is DONE (CI/agent mode)")
+    w.add_argument("--timeout", type=float, default=None,
+                   help="stop after this many seconds (exit 1 if still incomplete)")
+    w.add_argument("--max-ticks", type=int, default=0, help="stop after N polls (0 = unlimited)")
+    w.add_argument("--json", action="store_true",
+                   help="NDJSON: one machine-readable line per state change")
+    w.set_defaults(func=_cmd_watch)
     rules = sub.add_parser("rules", help="print canonical OOPTDD methodology rules")
     rules.add_argument("--cypher", action="store_true", help="print KG seed Cypher")
     rules.add_argument("--params", action="store_true", help="also print Cypher params")
