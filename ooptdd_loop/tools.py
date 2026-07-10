@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
-from .report import next_step_context
+from .report import next_step_context, run_payload as _run_payload
 from .rules import (
     OOPTDD_METHOD_NAME,
     evaluate_spec_rules,
@@ -49,23 +49,6 @@ class Tool:
     description: str
     parameters: dict          # {arg: {"type":..., "required":bool, "desc":...}}
     fn: Callable
-
-
-def _run_payload(run) -> dict:
-    return {
-        "cid": run.cid,
-        "backend": run.backend,
-        "complete": run.complete,
-        "done": run.n_done,
-        "total": len(run.results),
-        "methodology_ok": run.methodology_ok,
-        "methodology_checks": [asdict(c) for c in run.methodology_checks],
-        "requirements": [
-            {"id": r.id, "gate_ok": r.gate_ok, "reachable": r.reachable,
-             "bound": r.bound, "done": r.done}
-            for r in run.results
-        ],
-    }
 
 
 def t_list_requirements(spec: str) -> dict:
@@ -113,12 +96,31 @@ def t_watch_tick(spec: str, cid: str, produce: bool = False) -> dict:
     MCP is synchronous request/response, so the infinite watch loop cannot be a tool;
     this re-judges the events already shipped under ``cid`` (``produce=False``, the
     ``--attach`` semantic: call again as more events arrive) or runs the target first
-    under that cid (``produce=True``). kg_write/kg_store stay off — repeat-safe."""
-    from .runner import run_loop
-    from .watch import run_payload
+    under that cid (``produce=True``). ``produce=True`` is REFUSED when the store
+    already holds events for the cid: this tool's cid is caller-pinned, and re-producing
+    a pinned cid double-counts ``op: "=="`` exact-count gates (a green run would flip
+    falsely RED on the second call — and a forged partial run could flip a RED one
+    green). Re-judge with ``produce=False``, or produce under a fresh cid.
+    kg_write/kg_store stay off — with the guard, calls are repeat-safe."""
+    from ooptdd.backends import get_backend
 
-    run = run_loop(load_spec(spec), cid=cid, produce=produce)
-    payload = run_payload(run)
+    from .engine.selector_gates import _query_events
+    from .runner import run_loop
+
+    s = load_spec(spec)
+    if produce:
+        backend = get_backend(s.target.backend, **s.target.backend_options)
+        try:
+            prior = len(_query_events(backend, cid).events)
+        except Exception:  # noqa: BLE001 — unreachable store: prior production unprovable
+            prior = 0
+        if prior:
+            raise ValueError(
+                f"watch_tick: {prior} event(s) are already shipped under cid {cid!r} — "
+                're-producing a pinned cid double-counts `op: "=="` exact-count gates. '
+                "Re-judge them with produce=false, or run under a fresh cid.")
+    run = run_loop(s, cid=cid, produce=produce)
+    payload = _run_payload(run)
     payload["next_step"] = next_step_context(run)   # empty when complete
     return payload
 
@@ -310,12 +312,14 @@ TOOLS: list[Tool] = [
          t_run),
     Tool("watch_tick", "One-shot watch tick: re-judge the events already shipped under a cid "
                        "(produce=false, incremental — call again as events arrive), or run the "
-                       "target first under that cid (produce=true). Non-looping MCP form of "
-                       "`ooptdd-loop watch`.",
+                       "target first under that cid (produce=true; refused when the cid already "
+                       "has events — re-producing a pinned cid double-counts exact-count gates). "
+                       "Non-looping MCP form of `ooptdd-loop watch`.",
          {"spec": {"type": "string", "required": True, "desc": "path to a spec yaml"},
           "cid": {"type": "string", "required": True, "desc": "correlation id to (re-)judge"},
           "produce": {"type": "boolean", "required": False,
-                      "desc": "run the target under this cid before judging (default false)"}},
+                      "desc": "run the target under this cid before judging (default false; "
+                              "refused if the cid already has shipped events)"}},
          t_watch_tick),
     Tool("validate_spec", "Validate OOPTDD methodology rules without running the system.",
          {"spec": {"type": "string", "required": True, "desc": "path to a spec yaml"}},

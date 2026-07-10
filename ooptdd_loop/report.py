@@ -1,6 +1,7 @@
 """Render a RunResult for humans and for the next agent step."""
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # type-only — importing it at runtime would cycle with runner, which
@@ -59,6 +60,34 @@ def _check_miss(c: dict) -> str:
         "where:" + ",".join(f"{k}={v}" for k, v in (c.get("where") or {}).items())
     ) or "(any)"
     return f"{target} {c.get('op')} {c.get('want')} (got {c.get('got')})"
+
+
+def run_payload(run: RunResult) -> dict:
+    """THE machine-readable verdict payload — one canonical shape shared by the ``run``
+    MCP tool, the ``watch_tick`` MCP tool and ``watch --json`` lines, so an agent hopping
+    between surfaces never sees diverging row schemas. RunResult field changes land here
+    once; do not hand-assemble this dict anywhere else."""
+    return {
+        "cid": run.cid,
+        "backend": run.backend,
+        "complete": run.complete,
+        "done": run.n_done,
+        "total": len(run.results),
+        "methodology_ok": run.methodology_ok,
+        "methodology_checks": [asdict(c) for c in run.methodology_checks],
+        "requirements": [
+            {
+                "id": r.id,
+                "gate_ok": r.gate_ok,
+                "reachable": r.reachable,
+                "bound": r.bound,
+                "done": r.done,
+                # precise miss reasons (undelivered events, count mismatches, order gaps)
+                "miss": [_check_miss(c) for c in r.checks if not c.get("passed")],
+            }
+            for r in run.results
+        ],
+    }
 
 
 def render(run: RunResult) -> str:

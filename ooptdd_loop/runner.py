@@ -271,9 +271,11 @@ def evaluate_requirements(spec: Spec, *, cid: str, backend=None, kg_write: bool 
 
 
 def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False,
-             kg_store=None, produce: bool = True) -> RunResult:
+             kg_store=None, produce: bool = True, backend=None) -> RunResult:
     cid = cid or os.getenv("OOPTDD_CID") or _new_cid()
-    backend = get_backend(spec.target.backend, **spec.target.backend_options)
+    # ``backend`` lets a long-lived caller (watch) inject a wrapped store — e.g. a query
+    # window pinned to its session start. Default (None) is byte-identical to before.
+    backend = backend or get_backend(spec.target.backend, **spec.target.backend_options)
     charge = None
     if produce:
         # ``produce=False`` re-evaluates already-shipped logs without re-running the system

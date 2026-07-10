@@ -10,7 +10,13 @@ Two cid regimes, mirroring ``runner.run_until_complete`` (see runner.py — re-p
 under a pinned cid double-counts ``op: "=="`` exact-count gates):
 
   * RUN mode (default) — a watched file changed ⇒ re-run the target under a **fresh cid**
-    and re-judge. Nothing changed ⇒ idle. 고정 cid 재produce 는 절대 하지 않는다.
+    and re-judge. While the verdict is RED and the backend has no watchable store file
+    (memory/openobserve/…), each poll RE-QUERIES the current cid (``produce=False``) so
+    late-arriving evidence — async ingest, a late same-process ship — still flips
+    RED→GREEN; a COMPLETE verdict goes idle. 고정 cid 재produce 는 절대 하지 않는다. A
+    produce that CRASHES retires its cid: partial events shipped before the crash must
+    never be re-judged into a COMPLETE (that would be the loop-forgery class bde2876
+    closed, reopened through watch).
   * ATTACH mode (``--attach``) — never run the target; incrementally re-judge the events an
     EXTERNAL process ships under the pinned ``--cid``. Cross-process attach needs a
     queryable cross-process backend: jsonl (the store file doubles as the poll trigger) or
@@ -19,6 +25,9 @@ under a pinned cid double-counts ``op: "=="`` exact-count gates):
 
 Judging is delegated wholesale to :func:`ooptdd_loop.runner.run_loop` (which is
 ``_produce_logs`` + ``evaluate_requirements``) — no verdict logic is duplicated here.
+The backend handed to it pins the gate query window's START at watcher start
+(:class:`_SessionWindowBackend`): watch is the first surface that outlives the backends'
+default 1h lookback, and a GREEN verdict must not expire just because the session got old.
 ``kg_write``/``kg_store`` stay OFF: repeated judgment must not write the KG every tick.
 """
 from __future__ import annotations
@@ -29,9 +38,14 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-from .report import _check_miss, next_step_context, render
+from ooptdd.backends import get_backend
+
+from .report import _check_miss, next_step_context, render, run_payload
 from .runner import RunResult, _new_cid, run_loop
 from .domain.spec import Spec, load_spec
+
+__all__ = ["Watcher", "WatchTick", "run_payload", "tick_payload", "watch_command",
+           "watched_paths"]
 
 _UNSET = object()
 
@@ -46,10 +60,13 @@ def _stat_sig(path: str) -> tuple[int, int] | None:
 
 
 def watched_paths(spec: Spec, spec_path: str) -> list[str]:
-    """Everything whose change should re-trigger the loop: the spec file itself, the
-    in_process target module source (best-effort ``mod.py`` / ``mod/__init__.py`` under
-    root), the ontology file, and every Longinus source. Non-existent candidates are
-    still watched — their creation is a change."""
+    """Everything statically knowable whose change should re-trigger the loop: the spec
+    file itself, the in_process target module source (``mod.py`` / ``mod/__init__.py``
+    under root), the ontology file, and every Longinus source. Non-existent candidates
+    are still watched — their creation is a change. Helper modules the target imports
+    are dynamic (only a run reveals them): the Watcher discovers those from
+    ``sys.modules`` after each produce (:func:`_modules_under_root`) and watches them
+    too."""
     paths = [os.path.abspath(spec_path)]
     root = spec.target.root or "."
 
@@ -81,6 +98,57 @@ def _store_path(spec: Spec) -> str | None:
     return os.path.abspath(p) if p else None
 
 
+# dirs under root that are never the SUT's own source (vendored/derived code), and the
+# harness's own packages — evicting THOSE from sys.modules would leave the running
+# watcher holding stale duplicate module objects.
+_VENDOR_DIRS = {"site-packages", "dist-packages", "__pycache__", ".venv", "venv",
+                "node_modules", ".git"}
+_PROTECTED_PKGS = {"ooptdd", "ooptdd_loop", "__main__"}
+
+
+def _modules_under_root(root: str) -> dict[str, str]:
+    """Loaded modules whose source file lives under ``root``: module name → abspath.
+    This is the SUT's real import closure — the entry module plus every helper it pulled
+    in — which only a run can reveal. Used twice: to WATCH helper files (an edit must
+    re-trigger) and to EVICT them before a re-run (runner pops only the entry module, so
+    an edited helper would otherwise run as stale cached code)."""
+    rootp = os.path.abspath(root) + os.sep
+    found: dict[str, str] = {}
+    for name, mod in list(sys.modules.items()):
+        if mod is None or name.partition(".")[0] in _PROTECTED_PKGS:
+            continue
+        f = getattr(mod, "__file__", None)
+        if not f:
+            continue
+        f = os.path.abspath(f)
+        if not f.startswith(rootp) or _VENDOR_DIRS.intersection(
+                f[len(rootp):].split(os.sep)):
+            continue
+        found[name] = f
+    return found
+
+
+class _SessionWindowBackend:
+    """Backend proxy for long-lived watch sessions: ``default_lookback_s`` grows with the
+    session's age, pinning the gate query window's START at (session start − base
+    lookback) instead of letting it slide with wall-clock (engine._query_events queries
+    [now − lookback, now + future_buffer]). Without this, an ``op: "=="`` gate that went
+    GREEN flips to RED once its events age out of the sliding window (~1h for
+    memory/jsonl) — a verdict must not expire merely because the watcher kept running.
+    Everything else (ship/query/caps/…) proxies to the real backend untouched."""
+
+    def __init__(self, inner, session_t0: float):
+        self._inner = inner
+        self._session_t0 = session_t0
+
+    @property
+    def default_lookback_s(self):
+        return self._inner.default_lookback_s + max(0.0, time.time() - self._session_t0)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
 @dataclass
 class WatchTick:
     """One evaluated poll. ``tick`` is the poll counter (idle polls return None and leave
@@ -96,32 +164,9 @@ class WatchTick:
     ts: float = 0.0
 
 
-def run_payload(run: RunResult) -> dict:
-    """Machine-readable requirement rows — shared by ``watch --json`` lines and the
-    ``watch_tick`` MCP tool (one line/one call ≙ one verdict, agent-parseable)."""
-    return {
-        "cid": run.cid,
-        "backend": run.backend,
-        "complete": run.complete,
-        "done": run.n_done,
-        "total": len(run.results),
-        "methodology_ok": run.methodology_ok,
-        "requirements": [
-            {
-                "id": r.id,
-                "gate_ok": r.gate_ok,
-                "reachable": r.reachable,
-                "bound": r.bound,
-                "done": r.done,
-                # precise miss reasons (undelivered events, count mismatches, order gaps)
-                "miss": [_check_miss(c) for c in r.checks if not c.get("passed")],
-            }
-            for r in run.results
-        ],
-    }
-
-
 def tick_payload(t: WatchTick) -> dict:
+    # requirement rows come from report.run_payload — the ONE canonical payload shape,
+    # shared with the `run`/`watch_tick` MCP tools (no hand-rolled schema drift here).
     if t.error is not None:
         return {"type": "watch_error", "tick": t.tick, "trigger": t.trigger,
                 "changed_files": t.changed_files, "error": t.error, "ts": t.ts}
@@ -163,8 +208,10 @@ class Watcher:
         else:
             self.cid = cid or _new_cid("watch")
         self._tick_no = 0
+        self._session_t0 = time.time()   # pins the gate query window's start (see proxy)
         self._sigs: dict[str, tuple[int, int] | None] = {}
         self._store_sig = _UNSET
+        self._helper_paths: list[str] = []   # under-root modules the last run imported
         self._prev_state = None
         self._last_error: str | None = None
         self.last_run: RunResult | None = None
@@ -175,7 +222,8 @@ class Watcher:
         (returns []); a path first seen on a later scan (e.g. added by a spec reload) is
         baselined silently — the spec change itself already triggered."""
         changed = []
-        for p in watched_paths(self.spec, self.spec_path):
+        for p in dict.fromkeys(watched_paths(self.spec, self.spec_path)
+                               + self._helper_paths):
             sig = _stat_sig(p)
             if p in self._sigs and self._sigs[p] != sig:
                 changed.append(p)
@@ -193,6 +241,35 @@ class Watcher:
         self._store_sig = sig
         return False if prev is _UNSET else prev != sig
 
+    def _should_poll(self) -> bool:
+        """Whether a no-store-file tick still re-queries (trigger ``poll``). Attach mode
+        always does — the pinned cid is fed by an external process, so arrival is only
+        ever visible by re-query. Run mode polls exactly while the last verdict is RED
+        and the target isn't broken: late evidence (async ingest on openobserve, a late
+        same-process ship on memory) must still flip RED→GREEN, but a COMPLETE verdict
+        is not churned, and an error state waits for the next save (don't judge a
+        crashed run's cid into a verdict)."""
+        if self.attach:
+            return True
+        return (self._last_error is None
+                and self.last_run is not None and not self.last_run.complete)
+
+    def _backend(self):
+        """The spec's backend (rebuilt per tick — a spec reload may repoint it), wrapped
+        so the gate query window stays pinned to the session start (see
+        :class:`_SessionWindowBackend`)."""
+        inner = get_backend(self.spec.target.backend, **self.spec.target.backend_options)
+        return _SessionWindowBackend(inner, self._session_t0)
+
+    def _evict_sut_modules(self) -> None:
+        """Fresh re-import for the whole under-root module set before a produce, not just
+        the entry module (runner pops only that): an edited HELPER module must not run
+        as stale cached code."""
+        if self.spec.target.mode != "in_process":
+            return
+        for name in _modules_under_root(self.spec.target.root or "."):
+            sys.modules.pop(name, None)
+
     # ── one poll ─────────────────────────────────────────────────────────────
     def tick(self) -> WatchTick | None:
         """One poll: detect changes, decide the trigger, re-run/re-judge, snapshot-diff.
@@ -200,6 +277,8 @@ class Watcher:
         self._tick_no += 1
         now = time.time()
         first = self._tick_no == 1
+        prev_sigs = dict(self._sigs)         # for un-consuming triggers on a broken spec
+        prev_store_sig = self._store_sig
         changed_files = self._scan_sources()
         store_changed = self._scan_store()
 
@@ -209,7 +288,7 @@ class Watcher:
             trigger = "file_change"
         elif store_changed:
             trigger = "events"
-        elif self.attach and store_changed is None:
+        elif store_changed is None and self._should_poll():
             trigger = "poll"      # no store file to watch — arrival is only visible by re-query
         else:
             return None
@@ -218,18 +297,39 @@ class Watcher:
             try:  # mid-edit yaml must not kill the loop; keep judging with the old spec
                 self.spec = load_spec(self.spec_path)
             except Exception as e:  # noqa: BLE001
+                # A broken yaml must not EAT co-arrived triggers (lost wakeup): un-consume
+                # every OTHER change (module edits, store writes) so the next tick
+                # re-detects them and judges with the OLD spec. The spec's own sig stays
+                # advanced — the reload error reports once instead of hammering.
+                for p in changed_files:
+                    if p != self.spec_path and p in prev_sigs:
+                        self._sigs[p] = prev_sigs[p]
+                self._store_sig = prev_store_sig
                 return self._error_tick(trigger, changed_files, f"spec reload failed: {e}", now)
 
         produce = (not self.attach) and (first or bool(changed_files))
         if produce and not first:
             # fresh cid per re-run — re-producing a pinned cid double-counts `op: "=="` gates
             self.cid = _new_cid("watch")
+        if produce:
+            self._evict_sut_modules()
         try:
-            run = run_loop(self.spec, cid=self.cid, produce=produce)
+            run = run_loop(self.spec, cid=self.cid, produce=produce, backend=self._backend())
         except Exception as e:  # noqa: BLE001 — mid-edit import/run crash = transient, not RED
+            if produce:
+                # The crashed run may have shipped a PARTIAL batch before dying. Absorb
+                # its store write so it can't retrigger as `events`, and RETIRE the cid
+                # so no later trigger judges a crashed run's partial evidence — a target
+                # that ships then dies must never turn COMPLETE (loop forgery, bde2876).
+                self._scan_store()
+                self.cid = _new_cid("watch")
             return self._error_tick(trigger, changed_files, f"{type(e).__name__}: {e}", now)
         if produce:
             self._scan_store()  # absorb our own store write so it doesn't retrigger next poll
+            # watch what the run ACTUALLY imported under root — helper edits must retrigger
+            if self.spec.target.mode == "in_process":
+                self._helper_paths = sorted(
+                    set(_modules_under_root(self.spec.target.root or ".").values()))
 
         state = _watch_state(run)
         changed = state != self._prev_state
