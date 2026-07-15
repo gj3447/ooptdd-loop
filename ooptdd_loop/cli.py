@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import sys
 
+from .harness import spend_file_reader
 from .mcp_config import CLIENTS, check_configs, generated_configs
 from .report import next_step_context, render
 from .runner import run_until_complete
@@ -40,10 +41,25 @@ def _neo4j_store():
 def _cmd_run(args) -> int:
     spec = load_spec(args.spec)
     store = _neo4j_store() if args.kg else None
-    run = run_until_complete(spec, cid=args.cid, max_passes=args.passes,
-                             kg_write=args.kg_write, kg_store=store,
-                             fix_cmd=args.fix, patience=args.patience,
-                             backoff_s=args.backoff)
+    try:
+        run = run_until_complete(spec, cid=args.cid, max_passes=args.passes,
+                                 kg_write=args.kg_write, kg_store=store,
+                                 fix_cmd=args.fix, patience=args.patience,
+                                 backoff_s=args.backoff,
+                                 max_seconds=args.max_seconds,
+                                 max_spend=args.max_spend,
+                                 spend_fn=spend_file_reader(args.spend_file)
+                                 if args.spend_file else None,
+                                 fix_timeout_s=args.fix_timeout,
+                                 journal_path=args.journal, run_id=args.run_id,
+                                 resume=args.resume,
+                                 env_allowlist=args.fix_env_allow,
+                                 write_allowlist=args.fix_write_allow)
+    except ValueError as exc:
+        # a mis-wired guard (a spend budget with no meter, a resume with no journal) is a
+        # config error: say so and stop, never run on with the guard silently disabled.
+        print(f"ooptdd-loop: {exc}", file=sys.stderr)
+        return 2
     if args.json:
         payload = {
             "cid": run.cid,
@@ -52,6 +68,7 @@ def _cmd_run(args) -> int:
             "done": run.n_done,
             "total": len(run.results),
             "loop_reason": run.loop_reason,
+            "loop_note": run.loop_note,
             "transcript": [dataclasses.asdict(p) for p in run.transcript],
             "requirements": [
                 {
@@ -72,6 +89,8 @@ def _cmd_run(args) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         print(render(run))
+        if run.loop_note:
+            print(f"loop stopped ({run.loop_reason}): {run.loop_note}", file=sys.stderr)
         ctx = next_step_context(run)
         if ctx:
             print("\n" + ctx, file=sys.stderr)
@@ -305,6 +324,37 @@ def main(argv=None) -> int:
                    help="stop after this many consecutive no-progress passes (stall)")
     r.add_argument("--backoff", type=float, default=0.0,
                    help="seconds to sleep between passes (for async-ingest stores)")
+    r.add_argument("--max-seconds", type=float, default=None,
+                   help="wall-clock budget for the loop; also bounds each --fix invocation. "
+                        "Stops with loop_reason=budget_time")
+    r.add_argument("--max-spend", type=float, default=None,
+                   help="agent spend budget; needs --spend-file to read spend from. "
+                        "Stops with loop_reason=budget_spend")
+    r.add_argument("--spend-file", default=None,
+                   help="file holding cumulative agent spend, updated by the fix command; "
+                        "the meter --max-spend reads (unreadable => stop, fail-closed)")
+    r.add_argument("--fix-timeout", type=float, default=None,
+                   help="kill the fix command (and everything it spawned) after this many "
+                        "seconds; stops with loop_reason=fix_timeout")
+    r.add_argument("--journal", default=None,
+                   help="append-only JSONL run journal; one line per completed pass")
+    r.add_argument("--run-id", default=None,
+                   help="stable run identity for --journal/--resume (default: the cid)")
+    r.add_argument("--resume", action="store_true",
+                   help="resume --run-id from --journal: restart at the next unpaid pass "
+                        "with the recorded stall state instead of repaying the agent")
+    r.add_argument("--fix-env-allow", action="append", default=None, metavar="NAME",
+                   help="env var the fix command may inherit (repeatable). DEFAULT IS A "
+                        "SCRUB (a behavior break): only PATH/HOME/TMPDIR/locale-ish names "
+                        "plus OOPTDD_* get through. Pass credentials explicitly (e.g. "
+                        "--fix-env-allow ANTHROPIC_API_KEY), or --fix-env-allow '*' to "
+                        "inherit the full parent env as before")
+    r.add_argument("--fix-write-allow", action="append", default=None, metavar="PATH",
+                   help="path prefix the fix command may write to (repeatable). When set, "
+                        "the git write-set is audited after each fix and anything outside "
+                        "stops with loop_reason=writeset_violation. Gitignored writes are "
+                        "audited too, so allowlist build artifacts (__pycache__/, .venv/) "
+                        "alongside the source the fix may edit")
     r.set_defaults(func=_cmd_run)
     w = sub.add_parser("watch", help="live harness: re-run on file change, re-judge as events arrive")
     w.add_argument("spec")

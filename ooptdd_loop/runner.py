@@ -16,13 +16,14 @@ the store and the source are the judges.
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import subprocess
 import time
 import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Sequence
 
 from ooptdd.backends import get_backend
 
@@ -32,6 +33,16 @@ from .engine.longinus import ReferenceSite, verify_binding, write_to_kg
 if TYPE_CHECKING:
     # charge_coverage 는 adapter(root) 계층 — engine 아님(test_architecture 계층규칙 준수).
     from .charge_coverage import ChargeReport
+from .harness import (
+    DurableRunJournal,
+    JournalEntry,
+    LoopGuard,
+    LoopReason,
+    audit_writeset,
+    fix_env,
+    git_head,
+    kill_process_tree,
+)
 from .oo_rca import rca_block
 from .rules import RuleCheck, evaluate_spec_rules, rule_checks_ok
 from .domain.spec import Spec
@@ -88,6 +99,15 @@ class LoopPass:
     fix_cmd: str | None = None
     fix_ran: bool = False
     fix_exit: int | None = None
+    #: the fix did not return within its bound and was killed (harness.LoopGuard.fix_timeout)
+    fix_timed_out: bool = False
+    #: this row was replayed from the run journal, not measured in this process. Its fix
+    #: fields are unknown by construction: the journal records a pass BEFORE its fix runs.
+    resumed: bool = False
+    #: S7 write audit of this pass's fix — paths outside the declared allowlist, and why the
+    #: audit could not run (either one stops the loop).
+    writeset_outside: list[str] = field(default_factory=list)
+    writeset_error: str | None = None
 
 
 @dataclass
@@ -101,10 +121,15 @@ class RunResult:
     # CI/harness path (logs already produced, nothing measured); a disabled report when the env
     # flag is off or coverage.py is absent; a populated report when measurement ran.
     charge: ChargeReport | None = None
-    #: fixpoint-loop audit trail (one entry per pass) and why the loop stopped:
-    #: ``complete`` | ``max_passes`` | ``stalled`` | ``single_pass``.
+    #: fixpoint-loop audit trail (one entry per pass) and why the loop stopped — a typed
+    #: ``harness.LoopReason`` (a ``str`` enum, so it compares and serializes as its value):
+    #: ``complete`` | ``max_passes`` | ``stalled`` | ``single_pass`` | ``budget_time`` |
+    #: ``budget_spend`` | ``fix_timeout`` | ``writeset_violation``.
     transcript: list[LoopPass] = field(default_factory=list)
     loop_reason: str = "single_pass"
+    #: why the loop stopped, in words, when the reason alone is not enough to act on
+    #: (which budget blew, what the fix wrote, why an audit could not run).
+    loop_note: str | None = None
 
     @property
     def methodology_ok(self) -> bool:
@@ -292,13 +317,21 @@ def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False,
     )
 
 
-def _loop_state(run: RunResult):
-    """A hashable snapshot of progress — the (id, done, bound) of every requirement plus
+def _loop_state(run: RunResult) -> str:
+    """A canonical snapshot of progress — the (id, done, bound) of every requirement plus
     the methodology verdict. Two passes with the same state made no progress, which is how
-    the loop detects a stall (an agent editing in circles) instead of spinning forever."""
-    return (
-        frozenset((r.id, r.done, r.bound) for r in run.results),
-        run.methodology_ok,
+    the loop detects a stall (an agent editing in circles) instead of spinning forever.
+
+    Serialized rather than hashed so the same key survives a crash in the run journal (S4):
+    a resumed loop compares this pass against the last one the *previous* process recorded.
+    """
+    return json.dumps(
+        {
+            "reqs": sorted([r.id, r.done, r.bound] for r in run.results),
+            "methodology_ok": run.methodology_ok,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
     )
 
 
@@ -306,30 +339,63 @@ def _red_ids(run: RunResult) -> list[str]:
     return [r.id for r in run.results if not r.done]
 
 
-def _run_fix(fix_cmd: str, spec: Spec, cid: str, rca: str) -> int:
+def _run_fix(fix_cmd: str, spec: Spec, cid: str, rca: str, *,
+             env_allowlist: str | Sequence[str] | None = None,
+             timeout: float | None = None) -> int:
     """Run the fix command so it can mutate the code from the RCA, then return its exit
     code. The RCA is passed both on stdin and via ``OOPTDD_RCA``/``OOPTDD_CID``/``OOPTDD_ROOT``
     so the command (a script, or an agent invocation like ``claude -p "$OOPTDD_RCA"``) has
     the grounded evidence. The loop only *invokes* the generator; it never imports or
-    hardcodes one — the generator≠verifier boundary the methodology depends on."""
-    env = {
-        **os.environ,
-        "OOPTDD_CID": cid,
-        "OOPTDD_RCA": rca,
-        "OOPTDD_ROOT": spec.target.root,
-        "OOPTDD_BACKEND": spec.target.backend,
-    }
-    proc = subprocess.run(fix_cmd, shell=True, env=env, input=rca,
-                          text=True, check=False)
+    hardcodes one — the generator≠verifier boundary the methodology depends on.
+
+    Contained (S7) and bounded (S5): the environment is an explicit allowlist rather than
+    everything the parent holds (see ``harness.fix_env`` — this is a behavior break), and a
+    fix that does not return within ``timeout`` has its whole process tree killed and
+    raises ``subprocess.TimeoutExpired`` for the loop to turn into a typed stop. The fix
+    gets its own session so killing it takes the agent it spawned with it.
+    """
+    env = fix_env(
+        {
+            "OOPTDD_CID": cid,
+            "OOPTDD_RCA": rca,
+            "OOPTDD_ROOT": spec.target.root,
+            "OOPTDD_BACKEND": spec.target.backend,
+        },
+        allowlist=env_allowlist,
+    )
+    proc = subprocess.Popen(fix_cmd, shell=True, env=env, stdin=subprocess.PIPE,
+                            text=True, start_new_session=True)
+    try:
+        proc.communicate(input=rca, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_process_tree(proc)
+        proc.communicate()          # reap the killed tree so it cannot become a zombie
+        raise
     return proc.returncode
+
+
+def _replayed_pass(entry: JournalEntry) -> LoopPass:
+    """Rebuild a transcript row from the journal so a resumed run reports the whole run,
+    not just the passes this process happened to make (S4)."""
+    return LoopPass(
+        pass_no=entry.pass_no, cid=entry.cid, complete=entry.complete, n_done=entry.n_done,
+        total=entry.total, red=list(entry.red), progressed=entry.progressed, resumed=True,
+    )
 
 
 def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 1,
                        kg_write: bool = False, kg_store=None,
                        fix_cmd: str | None = None, patience: int = 2,
-                       backoff_s: float = 0.0):
+                       backoff_s: float = 0.0,
+                       max_seconds: float | None = None,
+                       max_spend: float | None = None,
+                       spend_fn: Callable[[], float] | None = None,
+                       fix_timeout_s: float | None = None,
+                       journal_path=None, run_id: str | None = None, resume: bool = False,
+                       env_allowlist: str | Sequence[str] | None = None,
+                       write_allowlist: Sequence[str] | None = None):
     """Drive the requirements loop to a fixpoint: run → (if RED) fix → re-run, until every
-    requirement is DONE, the pass budget is spent, or the loop stalls.
+    requirement is DONE, a budget is spent, the loop stalls, or the fix breaks its contract.
 
     Two pass regimes on one budget (③ 병합: 브랜치 fixpoint superset + main 재조회 보존):
       * FIX PRESENT — genuine edit-run fixpoint. The code changes between passes, so the SUT is
@@ -342,23 +408,63 @@ def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 
         async-ingest latency; re-producing under a stable cid would double-count and flip
         exact-count gates. ``max_passes=1`` (default) is a single pass — fully backward compatible.
 
-    ``patience`` consecutive no-progress passes = a stall (an agent editing in circles). The
-    ``charge`` (L6) report from the last produce pass rides onto the final RunResult, since it
-    must describe the code the final verdict judges.
+    Every bound lives in ``harness.LoopGuard`` and every stop is a typed ``harness.LoopReason``
+    (S1) — the loop is never unbounded and never terminates on a bare exception:
+
+    * ``patience`` consecutive no-progress passes = a stall (an agent editing in circles).
+    * ``max_seconds`` (S5) bounds the wall-clock — measured from THIS call, so resuming grants
+      a fresh window — and stops with ``budget_time``. It also bounds each fix invocation, so a
+      hung agent can never make the between-pass checks unreachable.
+    * ``max_spend`` + ``spend_fn`` (S5) stop with ``budget_spend``; a spend meter that cannot
+      be read stops the loop fail-closed. ``max_spend`` without ``spend_fn`` is a ``ValueError``
+      here, not a silent no-op.
+    * ``fix_timeout_s`` (S5) bounds one fix invocation independently of the wall-clock; the
+      effective bound is the tighter of the two. On timeout the fix's process tree is killed and
+      the loop stops with ``fix_timeout``.
+    * ``journal_path`` (S4) appends one JSONL line per completed pass; ``resume=True`` with the
+      same ``run_id`` (default: the cid) restarts at the next unpaid pass with the recorded
+      stall state, instead of repaying every agent call from pass 1.
+    * ``env_allowlist`` (S7) is the fix command's environment. **Default is a scrub, which is a
+      behavior break** — see ``harness.fix_env`` for the migration path (``harness.INHERIT_ALL``).
+    * ``write_allowlist`` (S7) declares the path prefixes the fix may write to; anything else
+      git can see, and any audit that cannot run, stops with ``writeset_violation``. Read
+      ``harness.audit_writeset`` for exactly what that does and does not cover.
+
+    The ``charge`` (L6) report from the last produce pass rides onto the final RunResult, since
+    it must describe the code the final verdict judges.
     """
     from .report import next_step_context
 
     fix = fix_cmd if fix_cmd is not None else spec.target.fix
-    budget = max(max_passes, 1)
+    guard = LoopGuard(max_passes=max_passes, patience=patience, max_seconds=max_seconds,
+                      max_spend=max_spend, spend_fn=spend_fn, fix_timeout_s=fix_timeout_s)
     cid = cid or os.getenv("OOPTDD_CID") or _new_cid()
+    run_id = run_id or cid
+    journal = DurableRunJournal(journal_path, run_id) if journal_path else None
     transcript: list[LoopPass] = []
     prev_state = None
-    stall = 0
+    start_pass = 0
+    if resume:
+        if journal is None:
+            raise ValueError("resume=True needs journal_path — there is nothing to resume from")
+        replay = journal.replay()
+        transcript = [_replayed_pass(e) for e in replay.entries]
+        start_pass = replay.passes          # the passes already paid for; do not repay them
+        guard.stall = replay.stall
+        prev_state = replay.state_key
+    guard.start()
     last: RunResult | None = None
     last_charge = None
-    reason = "single_pass" if budget == 1 else "max_passes"
+    reason: LoopReason | None = None
 
-    for i in range(1, budget + 1):
+    for i in range(start_pass + 1, guard.budget + 1):
+        if last is not None:
+            # between passes only: the first pass of this call always gets to measure, so
+            # the loop can never return a verdict it did not take.
+            reason = guard.resource_stop()
+            if reason:
+                break
+        started_at = time.time()
         if fix:
             # genuine fixpoint: re-run the (possibly edited) code every pass under a fresh cid.
             last = run_loop(spec, cid=_new_cid(), kg_write=kg_write, kg_store=kg_store, produce=True)
@@ -371,34 +477,77 @@ def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 
         state = _loop_state(last)
         progressed = prev_state is None or state != prev_state
         prev_state = state
+        guard.note_progress(progressed, pass_no=i)
         record = LoopPass(
             pass_no=i, cid=last.cid, complete=last.complete, n_done=last.n_done,
             total=len(last.results), red=_red_ids(last), progressed=progressed,
         )
         transcript.append(record)
+        if journal is not None:
+            # durable BEFORE the fix runs: a crash inside the fix then resumes at the NEXT
+            # pass and re-measures the code on disk, rather than re-paying for that edit.
+            journal.append(JournalEntry(
+                run_id=run_id, pass_no=i, cid=last.cid, complete=last.complete,
+                n_done=last.n_done, total=len(last.results), red=tuple(record.red),
+                gates=tuple({"id": r.id, "gate_ok": r.gate_ok, "bound": r.bound, "done": r.done}
+                            for r in last.results),
+                progressed=progressed, stall=guard.stall, state_key=state,
+                started_at=started_at, ended_at=time.time(),
+            ))
 
         if last.complete:
-            reason = "complete"
+            reason = LoopReason.COMPLETE
             break
-        if i > 1 and not progressed:
-            stall += 1
-        else:
-            stall = 0
-        if i >= budget:
-            reason = "single_pass" if budget == 1 else "max_passes"
+        reason = guard.step_stop(i)              # step ceiling, then the no-progress stall
+        if reason:
             break
-        if stall >= patience:
-            reason = "stalled"
+        reason = guard.resource_stop()           # never pay an agent past a spent budget
+        if reason:
             break
         if fix:
             record.fix_cmd = fix
             record.fix_ran = True
-            record.fix_exit = _run_fix(fix, spec, last.cid, next_step_context(last))
+            pre_head = git_head(spec.target.root) if write_allowlist is not None else None
+            try:
+                record.fix_exit = _run_fix(fix, spec, last.cid, next_step_context(last),
+                                           env_allowlist=env_allowlist,
+                                           timeout=guard.fix_timeout())
+            except subprocess.TimeoutExpired as exc:
+                record.fix_timed_out = True
+                guard.stop_note = f"fix command exceeded {exc.timeout:.2f}s and was killed"
+                reason = LoopReason.FIX_TIMEOUT
+                break
+            if write_allowlist is not None:
+                audit = audit_writeset(spec.target.root, write_allowlist, pre_head=pre_head)
+                record.writeset_outside = list(audit.outside)
+                record.writeset_error = audit.error
+                if not audit.ok:
+                    guard.stop_note = audit.summary()
+                    reason = LoopReason.WRITESET_VIOLATION
+                    break
         if backoff_s:
             time.sleep(backoff_s)
 
+    if last is None:
+        # Resumed at/after the pass budget: no pass ran here. There is no verdict to report
+        # yet, and an empty re-query of an unproduced cid would MANUFACTURE an all-RED one.
+        # Take the genuine measurement this spec's own regime takes — fresh cid + produce for
+        # a fix loop (what its passes do), produce on the pinned cid otherwise (its pass 1).
+        last = run_loop(spec, cid=(_new_cid() if fix else cid), kg_write=kg_write,
+                        kg_store=kg_store, produce=True)
+        if last.charge is not None:
+            last_charge = last.charge
+        reason = LoopReason.COMPLETE if last.complete else (
+            LoopReason.SINGLE_PASS if guard.budget == 1 else LoopReason.MAX_PASSES)
+        guard.stop_note = (f"resumed past the {guard.budget}-pass budget "
+                           f"({start_pass} pass(es) already journaled); "
+                           "the verdict is a fresh measurement of the code on disk")
+
+    if reason is None:  # unreachable: step_stop always fires at the ceiling. Belt and braces.
+        reason = LoopReason.SINGLE_PASS if guard.budget == 1 else LoopReason.MAX_PASSES
     last.transcript = transcript
     last.loop_reason = reason
+    last.loop_note = guard.stop_note
     # MODE B 의 마지막 pass 는 re-query(produce=False)라 charge=None — 코드 불변이므로 pass1 의 charge 를 실어준다.
     if last.charge is None and last_charge is not None:
         last.charge = last_charge

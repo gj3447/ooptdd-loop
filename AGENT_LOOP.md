@@ -77,6 +77,69 @@ A minimal autonomous driver: run `--json`; if `complete` is false, hand the
 re-run after its edit; stop when `complete` is true. The loop is deterministic;
 only the dev step is the model.
 
+## Letting it drive itself: bounded, resumable, contained
+
+`--fix` hands the loop the agent directly, and `--passes` alone is not a budget:
+an agent can burn an hour of wall-clock or $40 inside a *single* pass, and a fix
+that never returns makes the between-pass checks unreachable. `ooptdd_loop/harness.py`
+is where every bound lives; the loop stops with a typed `loop_reason`:
+
+| you set | it stops with | when |
+|---|---|---|
+| `--passes N` | `max_passes` / `single_pass` | the step ceiling |
+| `--patience N` | `stalled` | N passes in a row changed nothing |
+| `--max-seconds S` | `budget_time` | wall-clock spent (also bounds each fix) |
+| `--max-spend X --spend-file F` | `budget_spend` | the meter reads ≥ X — **or cannot be read** |
+| `--fix-timeout S` | `fix_timeout` | the fix is killed, with everything it spawned |
+| `--fix-write-allow P` | `writeset_violation` | the fix wrote outside P — **or the audit couldn't run** |
+
+Those last two "or" clauses are the rule, not an edge case: a budget we cannot
+meter and an audit we cannot run **stop** the loop. An audit that cannot run and
+passes is worse than no audit, because it reports safety.
+
+```bash
+# crash-safe: one JSONL line per pass, resume at the next unpaid pass
+ooptdd-loop run spec.yaml --fix "$AGENT" --passes 20 \
+  --journal .ooptdd/run.jsonl --run-id nightly-42 --max-seconds 1800 --fix-timeout 300
+ooptdd-loop run spec.yaml --fix "$AGENT" --passes 20 \
+  --journal .ooptdd/run.jsonl --run-id nightly-42 --resume     # ← after a crash
+```
+
+Resume replays the journal for `--run-id`, restores the pass counter and the
+stall state, and re-measures the code on disk — it never repays the agent for a
+pass already bought, and never reports a verdict it did not measure.
+
+### The fix command's environment is scrubbed — a deliberate break
+
+**This changed.** The fix command used to inherit the whole parent environment;
+it now gets a minimal allowlist (`PATH`, `HOME`, `TMPDIR`, locale) plus the
+loop's own `OOPTDD_*` variables, and nothing else. Handing an agent every
+credential the loop happens to hold, for a job whose declared need is "edit
+source from an RCA", is not a default worth keeping.
+
+If your fix needs a credential, say so — or opt out of the scrub entirely:
+
+```bash
+ooptdd-loop run spec.yaml --fix "$AGENT" --fix-env-allow ANTHROPIC_API_KEY
+ooptdd-loop run spec.yaml --fix "$AGENT" --fix-env-allow '*'   # pre-scrub behavior
+```
+
+### What `--fix-write-allow` does and does not promise
+
+It audits what **git can see** in the target's work tree: the working tree, the
+gitignored paths (`--ignored=matching`, so a write cannot hide in one), and
+everything that differs from the pre-fix HEAD (so a fix that commits its own
+writes cannot leave a clean `git status` and pass). It does **not** see writes
+outside the work tree — `/tmp`, `$HOME`, another checkout, a network call. So
+the honest claim is *"no write git can see landed outside the declared paths"*,
+not *"the fix only wrote inside the declared paths"*. Real confinement of an
+untrusted fix needs an OS sandbox; this is a tripwire.
+
+One consequence: the audited write-set is deliberately over-inclusive, because
+attributing a path to *this* fix is not something git can answer. Allowlist what
+the run itself produces (`__pycache__/`, `.venv/`, `.ooptdd/`) alongside the
+source the fix may edit.
+
 ## Harness surface map
 
 - **Local coding harness (L_IDE)**: `ooptdd-loop run`, `validate-spec`, pytest,
