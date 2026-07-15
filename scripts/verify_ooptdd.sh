@@ -87,7 +87,11 @@ with open(sys.argv[1], encoding="utf-8") as fh:
 PY
 }
 
-run "ruff" ruff check .
+# `python -m ruff`, not bare `ruff`: bare `ruff` is only on PATH with the venv activated, so
+# the script reported "verification passed" for whoever guessed that step and died with
+# "ruff: command not found" for everyone else. $PYTHON is the one interpreter this script
+# already runs the suite with, so the linter and the tests cannot come from different envs.
+run "ruff" "$PYTHON" -m ruff check .
 run "pytest runtime/OTel focus" "$PYTHON" -m pytest -q tests/test_pytest_plugin.py tests/test_otel.py
 run "pytest full suite" "$PYTHON" -m pytest -q
 

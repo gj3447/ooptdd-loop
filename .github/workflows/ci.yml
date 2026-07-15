@@ -1,0 +1,26 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install sibling ooptdd (not on PyPI) + this package
+        run: |
+          python -m pip install --upgrade pip
+          # ooptdd is a sibling repo, not published to PyPI — install from git.
+          pip install "git+https://github.com/gj3447/ooptdd.git@main"
+          pip install -e ".[dev]"
+      - name: pytest
+        run: python -m pytest -q
