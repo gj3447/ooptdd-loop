@@ -13,7 +13,12 @@ import json
 from pathlib import Path
 import sys
 
-from .harness import spend_file_reader
+from .harness import (
+    DEFAULT_ENV_ALLOWLIST,
+    INHERIT_ALL,
+    JournalCorruptionError,
+    spend_file_reader,
+)
 from .mcp_config import CLIENTS, check_configs, generated_configs
 from .report import next_step_context, render
 from .runner import run_until_complete
@@ -38,6 +43,34 @@ def _neo4j_store():
     return Neo4jKgStore()
 
 
+def _fix_env_allowlist(values: list[str] | None) -> list[str] | None:
+    """Turn repeated ``--fix-env-allow NAME`` into the allowlist ``harness.fix_env`` wants.
+
+    The flag EXTENDS ``harness.DEFAULT_ENV_ALLOWLIST``; it does not replace it. ``--fix-env-allow
+    ANTHROPIC_API_KEY`` therefore means "the defaults PLUS that credential" — the only reading
+    that leaves the fix a PATH to find its own agent with. It replaced the defaults before, so
+    the documented migration handed the fix an env with no PATH and the agent died with 127
+    before it ever read the credential.
+
+    ``harness.fix_env``'s own ``allowlist`` argument stays literal — an explicit API allowlist
+    is exactly the allowlist — so this is where the CLI's additive form is built, and the two
+    now name the same env:
+
+        env_allowlist=[*DEFAULT_ENV_ALLOWLIST, "ANTHROPIC_API_KEY"]   # API
+        --fix-env-allow ANTHROPIC_API_KEY                             # CLI
+
+    ``'*'`` (``INHERIT_ALL``) is an opt-OUT of the scrub rather than one more name, so it is
+    returned untouched and the returned list keeps saying what it means. That branch is shape,
+    not behavior: ``fix_env`` tests for the sentinel by membership, so splicing the defaults
+    in around it would reach the same env either way.
+    """
+    if not values:
+        return None                       # no flag => the default scrub
+    if INHERIT_ALL in values:
+        return values
+    return [*DEFAULT_ENV_ALLOWLIST, *values]
+
+
 def _cmd_run(args) -> int:
     spec = load_spec(args.spec)
     store = _neo4j_store() if args.kg else None
@@ -53,11 +86,16 @@ def _cmd_run(args) -> int:
                                  fix_timeout_s=args.fix_timeout,
                                  journal_path=args.journal, run_id=args.run_id,
                                  resume=args.resume,
-                                 env_allowlist=args.fix_env_allow,
+                                 env_allowlist=_fix_env_allowlist(args.fix_env_allow),
                                  write_allowlist=args.fix_write_allow)
-    except ValueError as exc:
-        # a mis-wired guard (a spend budget with no meter, a resume with no journal) is a
-        # config error: say so and stop, never run on with the guard silently disabled.
+    except (ValueError, JournalCorruptionError, OSError) as exc:
+        # A mis-wired guard (a spend budget with no meter, a resume with no journal or no
+        # stable run_id), a journal that cannot be replayed, or a journal that cannot be
+        # written: all config errors. Say so and stop — never run on with the guard
+        # silently disabled, and never hand a user a raw traceback from `ooptdd-loop run`.
+        # OSError is caught broadly here, so an I/O failure raised by the *target* itself
+        # also lands as exit 2 rather than propagating; the message is the only thing that
+        # distinguishes them.
         print(f"ooptdd-loop: {exc}", file=sys.stderr)
         return 2
     if args.json:
@@ -344,11 +382,12 @@ def main(argv=None) -> int:
                    help="resume --run-id from --journal: restart at the next unpaid pass "
                         "with the recorded stall state instead of repaying the agent")
     r.add_argument("--fix-env-allow", action="append", default=None, metavar="NAME",
-                   help="env var the fix command may inherit (repeatable). DEFAULT IS A "
-                        "SCRUB (a behavior break): only PATH/HOME/TMPDIR/locale-ish names "
-                        "plus OOPTDD_* get through. Pass credentials explicitly (e.g. "
-                        "--fix-env-allow ANTHROPIC_API_KEY), or --fix-env-allow '*' to "
-                        "inherit the full parent env as before")
+                   help="EXTRA env var the fix command may inherit, ON TOP OF the default "
+                        "allowlist (repeatable). DEFAULT IS A SCRUB (a behavior break): "
+                        "only PATH/HOME/TMPDIR/locale-ish names plus OOPTDD_* get through. "
+                        "Name credentials explicitly — `--fix-env-allow ANTHROPIC_API_KEY` "
+                        "means the defaults PLUS that key, so the fix keeps its PATH — or "
+                        "`--fix-env-allow '*'` to inherit the full parent env as before")
     r.add_argument("--fix-write-allow", action="append", default=None, metavar="PATH",
                    help="path prefix the fix command may write to (repeatable). When set, "
                         "the git write-set is audited after each fix and anything outside "

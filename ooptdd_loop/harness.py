@@ -13,8 +13,12 @@ that loop trusts three things it should not:
 This module is those three controls, as the classes the runner actually uses. It maps to
 the PROM16 harness/loop-engineering criteria:
 
-* ``LoopReason``        — S1: typed terminal states. The loop never ends on a bare
-                          exception and never runs unbounded.
+* ``LoopReason``        — S1: typed terminal states. Every stop the loop *itself decides* —
+                          a spent budget, a hung fix, a stall, an escaped write — is one of
+                          these rather than a traceback, and none of its budgets is
+                          unbounded. It is not a blanket "no exception escapes": a
+                          misconfiguration raises, and the system under test's own
+                          exceptions propagate. See ``runner.run_until_complete``.
 * ``LoopGuard``         — S1 (step ceiling + no-progress patience) and S5 (wall-clock and
                           spend kill-switch), all independent of the agent's self-judgment.
 * ``DurableRunJournal`` — S4: an append-only JSONL record written as each pass completes,
@@ -40,7 +44,8 @@ from typing import Callable, Iterable, Sequence
 
 
 class LoopReason(str, Enum):
-    """Why the loop stopped — a typed terminal state (S1), never a bare exception.
+    """Why the loop stopped — a typed terminal state (S1) rather than a traceback, for every
+    stop the loop itself decides.
 
     A ``str`` enum: ``run.loop_reason == "stalled"`` and ``json.dumps`` keep working on the
     original four values, which stay the wire vocabulary.
@@ -378,6 +383,14 @@ def fix_env(injected: dict[str, str], *,
 
         fix_env(vars, allowlist=[*DEFAULT_ENV_ALLOWLIST, "ANTHROPIC_API_KEY"])
         fix_env(vars, allowlist=INHERIT_ALL)   # or opt out entirely (pre-scrub behavior)
+
+    ``allowlist`` here is LITERAL and REPLACES the defaults: the names given are the whole
+    allowlist. ``allowlist=["ANTHROPIC_API_KEY"]`` therefore yields an env with that key and
+    no PATH — which a fix invoked through a shell cannot run in (the shell falls back to a
+    built-in PATH and typically cannot find its own agent). That is why the first form above
+    splices ``DEFAULT_ENV_ALLOWLIST`` in explicitly. The CLI's ``--fix-env-allow`` is the
+    additive form of the same thing and does that splice for you (``cli._fix_env_allowlist``),
+    so ``--fix-env-allow ANTHROPIC_API_KEY`` and the first line above name the same env.
 
     ``injected`` always wins: the ``OOPTDD_*`` variables are the loop's contract with the
     fix, not something the caller's environment may shadow.

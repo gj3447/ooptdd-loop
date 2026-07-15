@@ -408,8 +408,15 @@ def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 
         async-ingest latency; re-producing under a stable cid would double-count and flip
         exact-count gates. ``max_passes=1`` (default) is a single pass — fully backward compatible.
 
-    Every bound lives in ``harness.LoopGuard`` and every stop is a typed ``harness.LoopReason``
-    (S1) — the loop is never unbounded and never terminates on a bare exception:
+    Every bound lives in ``harness.LoopGuard``, and every stop the loop DECIDES is a typed
+    ``harness.LoopReason`` (S1): no budget here is unbounded, and the failure modes the loop
+    owns — a spent budget, a hung fix, an unreadable meter, an unauditable write-set — are
+    typed stops rather than tracebacks. That is not a blanket "no exception escapes". Two
+    kinds deliberately do: a MISCONFIGURATION raises (``ValueError`` below, or
+    ``JournalCorruptionError``/``OSError`` from the journal), which ``cli`` turns into a
+    clean exit 2 rather than running on with a guard silently disabled; and an exception
+    from the SYSTEM UNDER TEST propagates to the caller, since the loop has no verdict to
+    report about code that could not run.
 
     * ``patience`` consecutive no-progress passes = a stall (an agent editing in circles).
     * ``max_seconds`` (S5) bounds the wall-clock — measured from THIS call, so resuming grants
@@ -422,10 +429,19 @@ def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 
       effective bound is the tighter of the two. On timeout the fix's process tree is killed and
       the loop stops with ``fix_timeout``.
     * ``journal_path`` (S4) appends one JSONL line per completed pass; ``resume=True`` with the
-      same ``run_id`` (default: the cid) restarts at the next unpaid pass with the recorded
-      stall state, instead of repaying every agent call from pass 1.
+      same ``run_id`` restarts at the next unpaid pass with the recorded stall state, instead
+      of repaying every agent call from pass 1. ``run_id`` defaults to the cid, which itself
+      defaults to a fresh UUID — so ``resume=True`` REQUIRES a caller-supplied ``run_id`` or
+      ``cid`` (or ``$OOPTDD_CID``) and is a ``ValueError`` without one: a resume keyed on an
+      identity the loop just invented matches no journal line and would silently repay from
+      pass 1. That catches a MISSING identity, not a WRONG one — a mistyped ``run_id`` also
+      matches nothing and also restarts at pass 1, and the loop cannot tell that apart from a
+      run that crashed before its first pass completed. ``LoopPass.resumed`` is the tell.
     * ``env_allowlist`` (S7) is the fix command's environment. **Default is a scrub, which is a
       behavior break** — see ``harness.fix_env`` for the migration path (``harness.INHERIT_ALL``).
+      It is LITERAL: it replaces ``harness.DEFAULT_ENV_ALLOWLIST`` rather than extending it, so
+      pass ``[*harness.DEFAULT_ENV_ALLOWLIST, "ANTHROPIC_API_KEY"]``, not ``["ANTHROPIC_API_KEY"]``
+      (which leaves the fix no PATH). The CLI's ``--fix-env-allow`` is the additive form.
     * ``write_allowlist`` (S7) declares the path prefixes the fix may write to; anything else
       git can see, and any audit that cannot run, stops with ``writeset_violation``. Read
       ``harness.audit_writeset`` for exactly what that does and does not cover.
@@ -438,15 +454,28 @@ def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 
     fix = fix_cmd if fix_cmd is not None else spec.target.fix
     guard = LoopGuard(max_passes=max_passes, patience=patience, max_seconds=max_seconds,
                       max_spend=max_spend, spend_fn=spend_fn, fix_timeout_s=fix_timeout_s)
-    cid = cid or os.getenv("OOPTDD_CID") or _new_cid()
+    cid = cid or os.getenv("OOPTDD_CID")
+    if resume:
+        if journal_path is None:
+            raise ValueError("resume=True needs journal_path — there is nothing to resume from")
+        if run_id is None and cid is None:
+            # run_id defaults to the cid, and an unsupplied cid is a fresh UUID minted right
+            # below. Resuming on that identity matches no journal line, so the loop would
+            # start at pass 1 and repay every agent call — the exact failure the journal
+            # exists to prevent, silently. Same precedent as max_spend without spend_fn: a
+            # guard that can never fire is worse than no guard.
+            raise ValueError(
+                "resume=True needs a stable run_id: a resume keyed on a freshly generated "
+                "cid can never match a journal line and would silently repay the agent "
+                "from pass 1"
+            )
+    cid = cid or _new_cid()
     run_id = run_id or cid
     journal = DurableRunJournal(journal_path, run_id) if journal_path else None
     transcript: list[LoopPass] = []
     prev_state = None
     start_pass = 0
     if resume:
-        if journal is None:
-            raise ValueError("resume=True needs journal_path — there is nothing to resume from")
         replay = journal.replay()
         transcript = [_replayed_pass(e) for e in replay.entries]
         start_pass = replay.passes          # the passes already paid for; do not repay them

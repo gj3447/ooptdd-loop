@@ -109,6 +109,21 @@ Resume replays the journal for `--run-id`, restores the pass counter and the
 stall state, and re-measures the code on disk — it never repays the agent for a
 pass already bought, and never reports a verdict it did not measure.
 
+**`--resume` needs a stable identity, and will refuse without one.** The run is
+keyed on `--run-id`, which defaults to `--cid`, which itself defaults to a
+*freshly generated* cid. A resume keyed on a cid the loop just invented can never
+match a journal line, so it would restart at pass 1 and repay every agent call —
+silently, which is the one thing the journal exists to prevent. So `--resume`
+without either `--run-id` or `--cid` (or `$OOPTDD_CID`) is a config error, exit 2,
+not a re-run. Pass the same `--run-id` you ran with.
+
+That guard catches a **missing** identity, not a **wrong** one. `--resume --run-id
+typo` matches no journal line either, and resumes from pass 1 without complaining
+— which is not a bug the loop can fix, because it is indistinguishable from a run
+that crashed before its first pass ever completed. If it matters, check the
+`resumed` flags in `--json`: an all-`false` transcript against a journal you
+believe has lines means your `--run-id` did not match.
+
 ### The fix command's environment is scrubbed — a deliberate break
 
 **This changed.** The fix command used to inherit the whole parent environment;
@@ -123,6 +138,23 @@ If your fix needs a credential, say so — or opt out of the scrub entirely:
 ooptdd-loop run spec.yaml --fix "$AGENT" --fix-env-allow ANTHROPIC_API_KEY
 ooptdd-loop run spec.yaml --fix "$AGENT" --fix-env-allow '*'   # pre-scrub behavior
 ```
+
+`--fix-env-allow` **adds to** the default allowlist: the line above means "the
+defaults *plus* `ANTHROPIC_API_KEY`", so your fix keeps the `PATH` it needs to
+find its own agent. Repeat the flag for more names.
+
+The Python API is the lower-level form and behaves differently on purpose:
+`env_allowlist=` is *literal*, so it replaces the defaults rather than extending
+them. Splice them in yourself:
+
+```python
+run_until_complete(spec, fix_cmd=AGENT,                     # == --fix-env-allow ANTHROPIC_API_KEY
+                   env_allowlist=[*harness.DEFAULT_ENV_ALLOWLIST, "ANTHROPIC_API_KEY"])
+run_until_complete(spec, fix_cmd=AGENT, env_allowlist=harness.INHERIT_ALL)   # == '*'
+```
+
+`env_allowlist=["ANTHROPIC_API_KEY"]` on its own is **not** that migration — it is
+an env with no `PATH`, in which a shell-invoked agent generally cannot start.
 
 ### What `--fix-write-allow` does and does not promise
 
