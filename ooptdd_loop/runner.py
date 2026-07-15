@@ -432,11 +432,14 @@ def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 
       same ``run_id`` restarts at the next unpaid pass with the recorded stall state, instead
       of repaying every agent call from pass 1. ``run_id`` defaults to the cid, which itself
       defaults to a fresh UUID — so ``resume=True`` REQUIRES a caller-supplied ``run_id`` or
-      ``cid`` (or ``$OOPTDD_CID``) and is a ``ValueError`` without one: a resume keyed on an
-      identity the loop just invented matches no journal line and would silently repay from
-      pass 1. That catches a MISSING identity, not a WRONG one — a mistyped ``run_id`` also
-      matches nothing and also restarts at pass 1, and the loop cannot tell that apart from a
-      run that crashed before its first pass completed. ``LoopPass.resumed`` is the tell.
+      ``cid`` (or ``$OOPTDD_CID``) that is NON-EMPTY, and is a ``ValueError`` without one: a
+      resume keyed on an identity the loop just invented matches no journal line and would
+      silently repay from pass 1. An empty ``run_id``/``cid`` is treated as no identity at
+      all, since that is precisely what the fallbacks below do with it. That catches a MISSING
+      or EMPTY identity, not a WRONG one — a mistyped ``run_id`` is stable and non-empty, so
+      it reaches the journal, matches nothing, and restarts at pass 1, and the loop cannot
+      tell that apart from a run that crashed before its first pass completed.
+      ``LoopPass.resumed`` is the tell.
     * ``env_allowlist`` (S7) is the fix command's environment. **Default is a scrub, which is a
       behavior break** — see ``harness.fix_env`` for the migration path (``harness.INHERIT_ALL``).
       It is LITERAL: it replaces ``harness.DEFAULT_ENV_ALLOWLIST`` rather than extending it, so
@@ -454,20 +457,29 @@ def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 
     fix = fix_cmd if fix_cmd is not None else spec.target.fix
     guard = LoopGuard(max_passes=max_passes, patience=patience, max_seconds=max_seconds,
                       max_spend=max_spend, spend_fn=spend_fn, fix_timeout_s=fix_timeout_s)
-    cid = cid or os.getenv("OOPTDD_CID")
+    # `or None` normalizes an EMPTY $OOPTDD_CID — what a shell exports for an unset variable —
+    # to "no cid" at the boundary, so it cannot present as an identity to anything below. It
+    # changes no behavior on its own today: both consumers of `cid` below already fall back
+    # with `or`, and the resume guard now tests truthiness. It is here so that a future
+    # consumer testing `is None` cannot re-open the hole this round closed.
+    cid = cid or os.getenv("OOPTDD_CID") or None
     if resume:
         if journal_path is None:
             raise ValueError("resume=True needs journal_path — there is nothing to resume from")
-        if run_id is None and cid is None:
-            # run_id defaults to the cid, and an unsupplied cid is a fresh UUID minted right
+        if not run_id and not cid:
+            # run_id defaults to the cid, and an absent cid is a fresh UUID minted right
             # below. Resuming on that identity matches no journal line, so the loop would
             # start at pass 1 and repay every agent call — the exact failure the journal
             # exists to prevent, silently. Same precedent as max_spend without spend_fn: a
             # guard that can never fire is worse than no guard.
+            # Truthiness, not `is None`: the two lines below CONSUME these with `or`, so an
+            # empty string is replaced by the fresh UUID exactly like an absent one. A guard
+            # that tested `is None` here would hold a predicate the consumers do not, and
+            # `--run-id ''` would fail open straight through it.
             raise ValueError(
-                "resume=True needs a stable run_id: a resume keyed on a freshly generated "
-                "cid can never match a journal line and would silently repay the agent "
-                "from pass 1"
+                "resume=True needs a stable run_id: a resume keyed on a missing or empty "
+                "identity falls back to a freshly generated cid, which can never match a "
+                "journal line and would silently repay the agent from pass 1"
             )
     cid = cid or _new_cid()
     run_id = run_id or cid

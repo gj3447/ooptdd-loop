@@ -117,12 +117,19 @@ silently, which is the one thing the journal exists to prevent. So `--resume`
 without either `--run-id` or `--cid` (or `$OOPTDD_CID`) is a config error, exit 2,
 not a re-run. Pass the same `--run-id` you ran with.
 
-That guard catches a **missing** identity, not a **wrong** one. `--resume --run-id
-typo` matches no journal line either, and resumes from pass 1 without complaining
-— which is not a bug the loop can fix, because it is indistinguishable from a run
-that crashed before its first pass ever completed. If it matters, check the
-`resumed` flags in `--json`: an all-`false` transcript against a journal you
-believe has lines means your `--run-id` did not match.
+**Empty counts as missing.** `--run-id ''`, or an exported-but-empty
+`$OOPTDD_CID` (what a shell gives you for `export OOPTDD_CID="$CI_RUN_ID"` when
+`CI_RUN_ID` is unset), is the same config error and the same exit 2 — an empty
+identity falls back to a fresh cid exactly like an absent one, so it gets the same
+answer rather than sliding past the guard.
+
+That guard catches a **missing or empty** identity, not a **wrong** one. `--resume
+--run-id typo` is stable and non-empty, so it reaches the journal — where it
+matches no line either, and resumes from pass 1 without complaining. That one is
+not a bug the loop can fix, because it is indistinguishable from a run that
+crashed before its first pass ever completed. If it matters, check the `resumed`
+flags in `--json`: an all-`false` transcript against a journal you believe has
+lines means your `--run-id` did not match.
 
 ### The fix command's environment is scrubbed — a deliberate break
 

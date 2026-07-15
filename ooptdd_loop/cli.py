@@ -380,7 +380,9 @@ def main(argv=None) -> int:
                    help="stable run identity for --journal/--resume (default: the cid)")
     r.add_argument("--resume", action="store_true",
                    help="resume --run-id from --journal: restart at the next unpaid pass "
-                        "with the recorded stall state instead of repaying the agent")
+                        "with the recorded stall state instead of repaying the agent. "
+                        "Needs a non-empty --run-id or --cid (or $OOPTDD_CID); without one "
+                        "it is a config error (exit 2), not a re-run from pass 1")
     r.add_argument("--fix-env-allow", action="append", default=None, metavar="NAME",
                    help="EXTRA env var the fix command may inherit, ON TOP OF the default "
                         "allowlist (repeatable). DEFAULT IS A SCRUB (a behavior break): "

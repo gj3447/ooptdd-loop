@@ -1,9 +1,13 @@
 """RED-first repair of the loop guards the 2026-07-15 review rejected.
 
-Each test proves the defect against the unfixed code (so it is RED before the fix) and is
-revert-proof: undo the production edit and the matching assertion goes RED again. The
-common thread is that the guards were only ever exercised at their two extremes — full
-scrub vs `'*'`, no journal vs an explicit run_id — and every bug lived in the middle.
+Each defect test proves its defect against the unfixed code (so it is RED before the fix)
+and is revert-proof: undo the production edit and the matching assertion goes RED again.
+Two exceptions are named where they sit rather than left for a reader to discover:
+``test_resume_with_a_WRONG_run_id_still_restarts_at_pass_1_documented_gap`` pins a gap
+instead of a fix, and ``test_an_empty_env_cid_never_presents_as_an_identity`` was GREEN
+before its repair too. The common thread is that the guards were only ever exercised at
+their two extremes — full scrub vs `'*'`, no journal vs an explicit run_id — and every bug
+lived in the middle.
 
 - FIX-1  ``--fix-env-allow`` REPLACED ``harness.DEFAULT_ENV_ALLOWLIST`` instead of
          extending it, so the documented migration (``--fix-env-allow ANTHROPIC_API_KEY``)
@@ -17,6 +21,15 @@ scrub vs `'*'`, no journal vs an explicit run_id — and every bug lived in the 
          that plainly had lines.
 - FIX-5  ``cli._cmd_run`` caught only ValueError, so a journal that cannot be replayed or
          cannot be written reached the production entrypoint as a raw traceback.
+- FIX-6  the FIX-3 guard tested ``is None`` while the two lines that CONSUME the identity
+         tested truthiness, so an EMPTY identity (``--run-id ''``, ``OOPTDD_CID=''``) passed
+         the guard and was then replaced by a fresh UUID — the same silent fail-open FIX-3
+         exists to stop, through the gap between the two predicates. The FIX-3 tests passed
+         identically with and without the guard's correction, which is what let it in.
+         The two FIX-6 production edits (the truthiness guard, the boundary normalization of
+         an empty ``$OOPTDD_CID``) OVERLAP on the env path: either one alone closes it, so
+         reverting either alone leaves ``..._empty_env_cid_...`` GREEN. It is RED against the
+         original, where both were absent. Only ``--run-id ''`` isolates the guard.
 """
 from __future__ import annotations
 
@@ -256,10 +269,11 @@ def test_resume_keyed_on_a_caller_supplied_cid_is_accepted(tmp_path, capsys):
 
 def test_resume_with_a_WRONG_run_id_still_restarts_at_pass_1_documented_gap(tmp_path, capsys):
     # NOT a fix — the honest boundary of the one above, pinned so it cannot drift unnoticed.
-    # The guard closes a MISSING identity. A mistyped one matches no journal line either and
-    # silently restarts at pass 1, because that is indistinguishable from a run that crashed
-    # before its first pass completed (a resume that MUST start at pass 1). AGENT_LOOP.md
-    # says so, and `resumed` is the tell.
+    # The guard closes a MISSING or EMPTY identity. A mistyped one is stable and non-empty,
+    # so it reaches the journal, matches no line either, and silently restarts at pass 1 —
+    # because THAT case is indistinguishable from a run that crashed before its first pass
+    # completed (a resume that MUST start at pass 1). AGENT_LOOP.md says so, and `resumed`
+    # is the tell.
     journal = tmp_path / "run.jsonl"
     fix_cmd, counter = _counting_fix(tmp_path)
     spec_path = _make(tmp_path)
@@ -274,6 +288,63 @@ def test_resume_with_a_WRONG_run_id_still_restarts_at_pass_1_documented_gap(tmp_
     payload = json.loads(capsys.readouterr().out)
     assert [p["resumed"] for p in payload["transcript"]] == [False, False]  # repaid from 1
     assert int(counter.read_text()) == 2                  # the agent WAS paid again
+
+
+# ── FIX-6 (blocker): an EMPTY identity is not a stable one either ─────────────
+def _journal_with_lines(tmp_path, capsys) -> tuple[str, object, object, str]:
+    """A real journaled run, so every resume below is aimed at a journal that HAS lines —
+    the only setup under which repaying the agent is unambiguously the fail-open."""
+    journal = tmp_path / "run.jsonl"
+    fix_cmd, counter = _counting_fix(tmp_path)
+    spec_path = _make(tmp_path)
+    assert cli.main(["run", spec_path, "--passes", "2", "--patience", "5", "--fix", fix_cmd,
+                     "--journal", str(journal), "--run-id", "RUN-EMPTY"]) == 1
+    capsys.readouterr()
+    assert int(counter.read_text()) == 1
+    assert len(journal.read_text().splitlines()) == 2
+    return spec_path, journal, counter, fix_cmd
+
+
+def test_resume_with_an_empty_run_id_is_a_config_error(tmp_path, capsys):
+    # `--run-id ''` passed the `is None` guard and was then overwritten by a fresh UUID two
+    # lines below (`run_id = run_id or cid`), so the resume was keyed on an identity the loop
+    # had just invented: exactly the fail-open the guard exists to stop, reached through the
+    # gap between an identity-check on `is None` and a consumption on truthiness.
+    spec_path, journal, counter, fix_cmd = _journal_with_lines(tmp_path, capsys)
+    rc = cli.main(["run", spec_path, "--passes", "4", "--patience", "5", "--fix", fix_cmd,
+                   "--journal", str(journal), "--run-id", "", "--resume"])
+    assert rc == 2                                # config error, not a silent re-run
+    assert "stable run_id" in capsys.readouterr().err
+    assert int(counter.read_text()) == 1          # the agent was NOT paid again
+
+
+def test_resume_with_an_empty_env_cid_is_a_config_error(tmp_path, capsys, monkeypatch):
+    # the same hole through the env: an exported-but-empty `OOPTDD_CID` is what a shell
+    # hands you for an unset variable (`export OOPTDD_CID="$CI_RUN_ID"`), and it presented
+    # as an identity all the way past the guard.
+    spec_path, journal, counter, fix_cmd = _journal_with_lines(tmp_path, capsys)
+    monkeypatch.setenv("OOPTDD_CID", "")
+    rc = cli.main(["run", spec_path, "--passes", "4", "--patience", "5", "--fix", fix_cmd,
+                   "--journal", str(journal), "--resume"])
+    assert rc == 2
+    assert "stable run_id" in capsys.readouterr().err
+    assert int(counter.read_text()) == 1
+
+
+def test_api_resume_with_an_empty_run_id_raises(tmp_path):
+    # the unit under the two e2e tests above, at the API the CLI calls.
+    with pytest.raises(ValueError, match="stable run_id"):
+        run_until_complete(load_spec(_make(tmp_path)), max_passes=2, fix_cmd="true",
+                           journal_path=tmp_path / "run.jsonl", run_id="", resume=True)
+
+
+def test_an_empty_env_cid_never_presents_as_an_identity(tmp_path, monkeypatch, capsys):
+    # NOT a defect test — this one was GREEN before the repair too, and is honest about it:
+    # `cid or _new_cid()` always minted a real cid regardless. It pins that behavior so the
+    # boundary normalization (`... or None`) cannot regress the non-resume path it touches.
+    monkeypatch.setenv("OOPTDD_CID", "")
+    assert cli.main(["run", _make(tmp_path), "--passes", "1", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["cid"]     # not "" — a minted cid
 
 
 # ── FIX-5: the production entrypoint must not emit a raw traceback ────────────
