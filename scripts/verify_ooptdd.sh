@@ -4,7 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PYTHON="${PYTHON:-python}"
+if [[ -n "${PYTHON:-}" ]]; then
+  : # Explicit caller choice wins (clean-install and alternate-interpreter checks).
+elif [[ -x "$ROOT/.venv/bin/python" ]]; then
+  PYTHON="$ROOT/.venv/bin/python"
+else
+  PYTHON="python"
+fi
 OOPTDD=("$PYTHON" -m ooptdd_loop.cli)
 TMPDIR="$(mktemp -d)"
 INCLUDE_EXTERNAL=0
