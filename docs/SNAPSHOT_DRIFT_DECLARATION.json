@@ -1,0 +1,41 @@
+{
+  "_comment": "Pinned snapshot-drift allowlist. Regenerate ONLY as a deliberate re-declaration: python scripts/gen_snapshot_drift_declaration.py --canonical <live ooptdd-loop>. The gate REDs on undeclared drift.",
+  "canonical_repo": "gj3447/ooptdd-loop",
+  "canonical_head": "85ef2b1e7b771ff8227c6305d949d88be8c8dd04",
+  "mark_head": "9488c3140f1b919af46552ce626a3531879522f2",
+  "mark_only": {
+    ".github/PULL_REQUEST_TEMPLATE.md": "bd88b7678fcd3901e651b4d998a27df6a1828416a058228c3949c85eb990ecbd",
+    "CLA.md": "6e5194ba6e1863122b10a260642ceffaa731ef73151d9fa2dd3717c40594e8af",
+    "CONTRIBUTING.md": "cce5f1a0402b2aa042fdad02efdd9157dc799db0c035fb01e8d5da03746ad3a7",
+    "COPYRIGHT": "7d95d503c9329be70b48d4edf29b834ee34947a15271085ef312d302bac875c4",
+    "LICENSING.md": "b2cb84f4ee362e935a17f2b2da4852db9f6e74c0b945a87b9e90547b13a02eb6",
+    "docs/OMD_BRIDGE.md": "77f16c1787ec931aeec68b3fc2846eaa8865d4ffff9211ded990fb0cbce0b104",
+    "ooptdd_loop/omd_bridge.py": "3ae34c3867447cfd2bd8109219ccc86db5d284534272b627992b232ad42615b6",
+    "scripts/gen_snapshot_drift_declaration.py": "c3c951b78452e5988c146342da2318fa43634f14cfcb6b45a9c4b6ec953b5c99",
+    "tests/test_omd_bridge.py": "ffea30ec667e1e4932a78ea7154748eeedc5c59905c03bbc77127036a7171809",
+    "tests/test_snapshot_drift_gate.py": "8cb7b90b0316cd773b27d8deb0eb317f7b72a2a57eb0ea88bb765c27726f546b"
+  },
+  "behind": {},
+  "modified": {
+    "CITATION.cff": {
+      "mark": "e23df712b825160ce706db9d95eb9be5ffa0c8f2ea8c15f07af3c113aee3f7ef",
+      "canonical": "c0c0c332dfad2482a0fdadbcfd47280a995fc5a6d9a0d4e04b60e45fbe4b3fe5"
+    },
+    "LICENSE": {
+      "mark": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+      "canonical": "01792a5e0bd1ef7c1ca4061c7977e4db79ef3d8aab48b5b28efb68354d40964c"
+    },
+    "NOTICE": {
+      "mark": "ee3c624ac7176d267dda1cc1b16497f2da96a8cb09ad1f609b4ee7b4f5653784",
+      "canonical": "dbf32bbe7f7a6320f71b6649a7e3187d34789c20326e06ac1ede27c1df7f2a28"
+    },
+    "ooptdd_loop/log_mcp.py": {
+      "mark": "e6e81b0f1fb40f06ac3fa5e2669f64aa87d0b55586f91164cb1022f6bfa7d97c",
+      "canonical": "7e722281e7f7593efc99626e01975845fdac6ad9484747c25a54e8a73d636d44"
+    },
+    "pyproject.toml": {
+      "mark": "5654d0a260087f1c6278277dfd6018e2db94a28cd8e03205cf0b444f8720a8c3",
+      "canonical": "0195eac4076c4205fbce3241a9b0c1e5a911c40c28e54fd34c0b9f43e5708bd3"
+    }
+  }
+}
