@@ -14,7 +14,7 @@ ooptdd-loop의 각 요구사항은 **Longinus 바인딩**(emit해야 할 소스 
 
 from __future__ import annotations
 
-from ooptdd_loop.spec import Spec, load_spec
+from ooptdd_loop.domain.spec import Spec, load_spec
 from omd_server import sets_overlap
 
 

@@ -26,6 +26,16 @@ VOLATILE_EVENT_KEYS = {
 }
 IDENTITY_KEYS = ("event", "service", "operation")
 
+#: Emission-order key stamped by the backends (`next(_SEQ)` — a *process*-global
+#: counter). Its absolute value is meaningless across runs and is not even
+#: contiguous within one, because concurrent cids draw from the same counter.
+#: Its *relative* order, however, is exactly what a golden should hold. So it is
+#: neither kept raw (a golden could then never match itself: the second run of an
+#: identical trace stamps 2,3 where the baseline holds 0,1 — measured 2026-08-07,
+#: `diff_golden` returned OUTPUT_CHANGED for a byte-identical trace) nor dropped
+#: (a reordering would stop being visible). It is replaced by its dense rank.
+EMIT_ORDER_KEY = "_emit_seq"
+
 
 def save_golden(
     spec: Spec,
@@ -97,8 +107,30 @@ def capture_snapshot(spec: Spec, *, cid: str | None = None, run: bool = False) -
         "total": len(result.results),
         "requirements": _requirements(result),
         "event_identities": [_event_identity(event) for event in events],
-        "events": [_normalize_event(event) for event in events],
+        "events": _rank_emit_order([_normalize_event(event) for event in events]),
     }
+
+
+def _rank_emit_order(normalized: list[dict]) -> list[dict]:
+    """Replace each event's raw `_emit_seq` with its dense rank in this snapshot.
+
+    Ties survive as ties (two events stamped with the same value keep the same
+    rank — a real property of the trace, not noise), and the gaps left by other
+    cids drawing from the shared counter disappear.
+    """
+    values = sorted({
+        event["attrs"][EMIT_ORDER_KEY]
+        for event in normalized
+        if EMIT_ORDER_KEY in event.get("attrs", {})
+    })
+    if not values:
+        return normalized
+    rank = {value: index for index, value in enumerate(values)}
+    for event in normalized:
+        attrs = event.get("attrs", {})
+        if EMIT_ORDER_KEY in attrs:
+            attrs[EMIT_ORDER_KEY] = rank[attrs[EMIT_ORDER_KEY]]
+    return normalized
 
 
 def default_golden_path(spec: Spec) -> str:

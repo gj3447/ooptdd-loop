@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip("omd_server")  # omd 미설치 시 skip
 
-from ooptdd_loop.spec import load_spec
+from ooptdd_loop.domain.spec import load_spec
 from ooptdd_loop.omd_bridge import (
     requirement_writesets, parallel_batches, declare_to_omd,
 )

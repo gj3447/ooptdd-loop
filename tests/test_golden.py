@@ -185,3 +185,52 @@ def test_golden_cli_and_tool_surface(tmp_path, capsys):
     tool_diff = call("golden_diff", spec=str(spec), baseline=str(baseline),
                      cid="golden-tool-surface", run=True)
     assert tool_diff["status"] == "PASSED"
+
+
+# ── 방출 순서 정규화 (2026-08-07) ─────────────────────────────────────────
+
+_TWO = [
+    'backend.ship([ev(cid, "order_received", amount=42)])',
+    'backend.ship([ev(cid, "payment_authorized", amount=42)])',
+]
+_TWO_SWAPPED = [
+    'backend.ship([ev(cid, "payment_authorized", amount=42)])',
+    'backend.ship([ev(cid, "order_received", amount=42)])',
+]
+
+
+def test_identical_trace_matches_itself_across_runs(tmp_path):
+    """골든이 자기 자신과 맞아야 한다 — 계측기의 최소 조건.
+
+    `_emit_seq` 는 프로세스 전역 카운터라 두 번째 실행이 같은 트레이스에
+    다른 번호를 찍는다. 그대로 비교하면 골든은 **영원히** OUTPUT_CHANGED 다
+    (실측 2026-08-07). 늘 우는 게이트는 곧 무시되는 게이트다.
+    """
+    spec = _scenario(tmp_path, "golden_selfmatch", _TWO)
+    baseline = tmp_path / "golden_self.json"
+    save_golden(load_spec(str(spec)), out=str(baseline), cid="golden-a", run=True)
+
+    for cid in ("golden-b", "golden-c"):        # 오프셋이 계속 커져도 무관해야
+        diff = diff_golden(load_spec(str(spec)), baseline=str(baseline),
+                           cid=cid, run=True)
+        assert diff["status"] == "PASSED", (cid, diff["changes"])
+
+
+def test_reordering_is_still_caught_after_normalization(tmp_path):
+    """★ 정규화가 눈을 멀게 하지 않았는가 — 순서를 바꾸면 붉어야 한다.
+
+    절대 오프셋을 지우면서 상대 순서까지 지웠다면 이 시험이 통과하지 않는다.
+    (모듈 이름을 갈라 쓰는 이유: 같은 이름에 같은 크기로 덮어쓰면 .pyc 가
+    같은 mtime/size 로 재사용돼 **바꾼 소스가 안 돈다** — 2026-08-07 실측.
+    형제 시험들이 시나리오마다 새 이름을 쓰는 것도 같은 이유다.)
+    """
+    base = _scenario(tmp_path, "golden_order_base", _TWO)
+    swapped = _scenario(tmp_path, "golden_order_swapped", _TWO_SWAPPED)
+    baseline = tmp_path / "golden_order.json"
+    save_golden(load_spec(str(base)), out=str(baseline), cid="golden-a", run=True)
+
+    diff = diff_golden(load_spec(str(swapped)), baseline=str(baseline),
+                       cid="golden-swapped", run=True)
+    assert diff["status"] != "PASSED", (
+        "방출 순서가 뒤집혔는데 골든이 통과했다 — 정규화가 순서까지 지웠다")
+    assert any(c["kind"] == "event_identity_sequence" for c in diff["changes"])
