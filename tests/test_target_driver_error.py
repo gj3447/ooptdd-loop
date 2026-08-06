@@ -34,7 +34,7 @@ def run_pipeline(backend, cid):
     logger.info("paid", extra={"event": "paid", "operation": "pay"})
 """
     if explode:
-        body += """    raise AssertionError("driver assert blew up")
+        body += """    assert 1 == 2, "driver assert blew up"
 """
     app.write_text(body, encoding="utf-8")
 
@@ -74,6 +74,9 @@ def test_raising_target_is_evaluated_and_never_complete(tmp_path):
     assert run.driver_error is not None
     assert "AssertionError" in run.driver_error
     assert "driver assert blew up" in run.driver_error
+    # bare assert 계급의 외부 앵커(우로보로스 드라이버의 심볼 grep)가 살려면
+    # 소스 라인이 실려야 한다 — 메시지 없는 assert 는 소스가 곧 사유다.
+    assert "assert 1 == 2" in run.driver_error
     assert not run.complete
 
     out = render(run)

@@ -183,7 +183,11 @@ def _describe_driver_error(exc: BaseException) -> str:
     where = ""
     if frames:
         f = frames[-1]
-        where = f" (at {f.filename}:{f.lineno} in {f.name})"
+        # The source line matters: a bare ``assert a == b`` has an empty message,
+        # so without it the line "what check died" is invisible — external red
+        # anchors (ouroboros drivers grepping for the asserted symbol) rely on it.
+        source = f" — {f.line.strip()}" if f.line else ""
+        where = f" (at {f.filename}:{f.lineno} in {f.name}{source})"
     return f"{type(exc).__name__}: {exc}{where}"
 
 
