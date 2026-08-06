@@ -103,6 +103,7 @@ def _cmd_run(args) -> int:
             "cid": run.cid,
             "backend": run.backend,
             "complete": run.complete,
+            "driver_error": run.driver_error,
             "done": run.n_done,
             "total": len(run.results),
             "loop_reason": run.loop_reason,

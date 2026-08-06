@@ -95,8 +95,11 @@ def render(run: RunResult) -> str:
         f"ooptdd-loop  cid={run.cid}  backend={run.backend}",
         f"requirements: {run.n_done}/{len(run.results)} DONE  "
         f"-> {'COMPLETE ✅' if run.complete else 'INCOMPLETE'}",
-        "",
     ]
+    if getattr(run, "driver_error", None):
+        lines.append(f"driver: FAILED — {run.driver_error}")
+        lines.append("        (gate verdicts below reflect events shipped up to the failure)")
+    lines.append("")
     if run.methodology_checks:
         passed = sum(1 for c in run.methodology_checks if c.passed)
         total = len(run.methodology_checks)

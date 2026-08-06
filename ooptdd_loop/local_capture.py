@@ -33,23 +33,36 @@ def capture_logging_to_backend(
     backend,
     cid: str,
     *,
-    logger_name: str | None = None,
+    logger_name: str | list[str] | None = None,
     level: int | str = logging.INFO,
     service: str | None = None,
 ):
-    """Capture structured Python logging records and ship them to ``backend``."""
-    logger = logging.getLogger(logger_name)
-    old_level = logger.level
+    """Capture structured Python logging records and ship them to ``backend``.
+
+    ``logger_name`` accepts a single name or a list of **sibling** logger names —
+    a spec whose pipeline spans layers (e.g. an engine on one logger and an
+    adapter harness on another) can gate both axes in one run.  When ``service``
+    is not forced, each event carries its own logger name as ``service``, so
+    gates stay per-axis.  Do not mix a logger with its own ancestor (records
+    propagate to ancestor handlers and would be captured twice).
+    """
+    names = logger_name if isinstance(logger_name, (list, tuple)) else [logger_name]
+    if not names:
+        names = [None]
     handler = StructuredLogHandler(backend, cid, service=service)
     handler.setLevel(_levelno(level))
-    logger.addHandler(handler)
-    if old_level == logging.NOTSET or old_level > handler.level:
-        logger.setLevel(handler.level)
+    loggers = [logging.getLogger(name) for name in names]
+    old_levels = [lg.level for lg in loggers]
+    for lg in loggers:
+        lg.addHandler(handler)
+        if lg.level == logging.NOTSET or lg.level > handler.level:
+            lg.setLevel(handler.level)
     try:
         yield handler
     finally:
-        logger.removeHandler(handler)
-        logger.setLevel(old_level)
+        for lg, old_level in zip(loggers, old_levels):
+            lg.removeHandler(handler)
+            lg.setLevel(old_level)
 
 
 def structlog_event_processor(backend, cid: str, *, service: str | None = None):

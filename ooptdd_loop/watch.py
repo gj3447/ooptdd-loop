@@ -324,6 +324,15 @@ class Watcher:
                 self._scan_store()
                 self.cid = _new_cid("watch")
             return self._error_tick(trigger, changed_files, f"{type(e).__name__}: {e}", now)
+        if run.driver_error is not None:
+            # run_loop now absorbs target crashes into an incomplete verdict (the `run`
+            # CLI contract: verdicts, never a raw traceback). For watch the SAME event is
+            # a mid-edit transient — keep the historical surface: error tick, no run,
+            # retired cid (partial evidence must never be judged by a later trigger).
+            if produce:
+                self._scan_store()
+                self.cid = _new_cid("watch")
+            return self._error_tick(trigger, changed_files, run.driver_error, now)
         if produce:
             self._scan_store()  # absorb our own store write so it doesn't retrigger next poll
             # watch what the run ACTUALLY imported under root — helper edits must retrigger

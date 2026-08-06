@@ -33,6 +33,7 @@ def test_run_until_complete_runs_sut_once_no_double_count(monkeypatch):
     def fake_produce(spec, backend, cid):
         calls["n"] += 1
         backend.ship([{"cid": cid, "event": "paid"}])
+        return None, None       # (charge, driver_error) — 실물 계약과 동형
 
     monkeypatch.setattr(runner, "_produce_logs", fake_produce)
 

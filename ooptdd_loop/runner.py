@@ -114,6 +114,10 @@ class LoopPass:
 class RunResult:
     cid: str
     backend: str
+    #: one-line description of a target/driver failure this pass, or None. A crashed
+    #: driver can never claim COMPLETE — evidence after the crash point was never
+    #: produced, so gate-green on partial events must not read as done (vacuous-pass).
+    driver_error: str | None = None
     results: list[ReqResult] = field(default_factory=list)
     methodology_checks: list[RuleCheck] = field(default_factory=list)
     # ②필드 union: main charge + branch transcript/loop_reason (셋 다 default·telemetry, 상호작용 없음).
@@ -138,7 +142,8 @@ class RunResult:
     @property
     def complete(self) -> bool:
         return (
-            bool(self.results)
+            self.driver_error is None
+            and bool(self.results)
             and all(r.done for r in self.results)
             and self.methodology_ok
         )
@@ -165,11 +170,35 @@ def _want_events(gate: list[dict]) -> list[str]:
     return want
 
 
+def _describe_driver_error(exc: BaseException) -> str:
+    """One line a user can act on — type, message, innermost frame.
+
+    The full traceback is deliberately not preserved: the contract of
+    ``ooptdd-loop run`` is verdicts, and a driver failure is a verdict
+    (``complete=False``) with a pointer, not a stack dump.
+    """
+    import traceback
+
+    frames = traceback.extract_tb(exc.__traceback__)
+    where = ""
+    if frames:
+        f = frames[-1]
+        where = f" (at {f.filename}:{f.lineno} in {f.name})"
+    return f"{type(exc).__name__}: {exc}{where}"
+
+
 def _produce_logs(spec: Spec, backend, cid: str):
     """Run the system under test so it emits events under ``cid``.
 
-    Returns the charge-coverage controller for the run (a no-op one unless ``OOPTDD_CHARGE_COVERAGE``
-    is set and coverage.py is installed), so the caller can build the advisory L6 report.
+    Returns ``(charge, driver_error)``: the charge-coverage controller for the run
+    (a no-op one unless ``OOPTDD_CHARGE_COVERAGE`` is set and coverage.py is
+    installed) and a one-line description of a target failure, or ``None``.
+
+    A raising target is not a crash of the *grader* — events shipped before the
+    failure are real evidence, so the caller still evaluates every requirement
+    and reports the failure as an incomplete verdict instead of a raw traceback
+    (the ``cli`` promise: never hand the user an unrendered stack).  Spec/config
+    errors (missing ``callable:``/``command:``, unknown mode) still raise.
     """
     from .charge_coverage import _NullController, coverage_session
 
@@ -188,7 +217,11 @@ def _produce_logs(spec: Spec, backend, cid: str):
         # cache forces the edited file to be read.
         importlib.invalidate_caches()
         sys.modules.pop(mod_name, None)
-        mod = importlib.import_module(mod_name)
+        try:
+            mod = importlib.import_module(mod_name)
+        except Exception as exc:  # noqa: BLE001 — a broken driver is a verdict, not a crash
+            return (_NullController(note="target import failed — nothing measured"),
+                    _describe_driver_error(exc))
         capture = t.capture or {}
         capture_ctx = nullcontext()
         if capture.get("logging"):
@@ -201,17 +234,25 @@ def _produce_logs(spec: Spec, backend, cid: str):
                 level=capture.get("level", "INFO"),
                 service=capture.get("service"),
             )
+        driver_error = None
         # Measure the target's entry module while it runs; emit sites elsewhere are out of scope.
         with coverage_session([getattr(mod, "__file__", None)]) as charge:
             with capture_ctx:
-                getattr(mod, fn)(backend, cid)
-        return charge
+                try:
+                    getattr(mod, fn)(backend, cid)
+                except Exception as exc:  # noqa: BLE001 — same: evaluate what arrived
+                    driver_error = _describe_driver_error(exc)
+        return charge, driver_error
     elif t.mode == "command":
         if not t.command:
             raise ValueError("command target needs `command:`")
         env = {**os.environ, "OOPTDD_CID": cid, "OOPTDD_BACKEND": t.backend}
-        subprocess.run(t.command, shell=True, env=env, check=False)
-        return _NullController(note="command-mode target not measured (runs in a subprocess)")
+        proc = subprocess.run(t.command, shell=True, env=env, check=False)
+        driver_error = None
+        if proc.returncode != 0:
+            driver_error = f"command target exited {proc.returncode}: {t.command}"
+        return (_NullController(note="command-mode target not measured (runs in a subprocess)"),
+                driver_error)
     else:
         raise ValueError(f"unknown target mode {t.mode!r}")
 
@@ -302,12 +343,13 @@ def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False,
     # window pinned to its session start. Default (None) is byte-identical to before.
     backend = backend or get_backend(spec.target.backend, **spec.target.backend_options)
     charge = None
+    driver_error = None
     if produce:
         # ``produce=False`` re-evaluates already-shipped logs without re-running the system
         # under test — used by run_until_complete for every pass after the first, so a stable
         # cid is not re-shipped (see there).
-        charge = _produce_logs(spec, backend, cid)
-    return evaluate_requirements(
+        charge, driver_error = _produce_logs(spec, backend, cid)
+    run = evaluate_requirements(
         spec,
         cid=cid,
         backend=backend,
@@ -315,6 +357,8 @@ def run_loop(spec: Spec, *, cid: str | None = None, kg_write: bool = False,
         kg_store=kg_store,
         charge=charge,
     )
+    run.driver_error = driver_error
+    return run
 
 
 def _loop_state(run: RunResult) -> str:
