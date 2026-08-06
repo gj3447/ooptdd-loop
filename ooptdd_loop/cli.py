@@ -345,7 +345,37 @@ def _cmd_golden_diff(args) -> int:
     return 1 if payload["status"] in fail_on else 0
 
 
+def _make_output_encoding_safe() -> None:
+    """Never let a verdict die on the console's codec.
+
+    The report prints ✅/❌ and Korean requirement descriptions. On a Korean
+    Windows console the stream codec is cp949, and `print` then raises
+    `UnicodeEncodeError: 'cp949' codec can't encode character '\\u2705'` —
+    the loop computed a correct verdict and crashed while *saying* it, which the
+    caller sees as a nonzero exit and reads as a failed gate (measured
+    2026-08-07, beadscan_tester).
+
+    ★The codec is deliberately left alone — only the error policy changes.
+    Forcing UTF-8 here just moves the mismatch: the child then writes UTF-8
+    while a caller doing `subprocess.run(..., text=True)` still decodes with the
+    *locale* codec, and its reader thread dies with `UnicodeDecodeError` leaving
+    `stdout=None` next to `returncode=0` — a verdict that looks like it
+    succeeded and says nothing (measured 2026-08-07 while fixing exactly this).
+    Degrading with `errors="replace"` costs one character for an emoji and keeps
+    Korean intact, because cp949 encodes Hangul perfectly well.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:                   # piped through a plain object
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
 def main(argv=None) -> int:
+    _make_output_encoding_safe()
     p = argparse.ArgumentParser(prog="ooptdd-loop")
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run the requirements loop once")
