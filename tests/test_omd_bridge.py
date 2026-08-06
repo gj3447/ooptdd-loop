@@ -57,7 +57,11 @@ def test_parallel_batches(tmp_path):
 
 def test_declare_to_omd_coordinates(tmp_path):
     from omd_server import Coordinator
-    omd = Coordinator()
+
+    # omd_server §D14 는 `:memory:` 기본값을 막는다(재기동마다 fence/leader
+    # epoch 가 0 으로 리셋돼 낡은 토큰과 충돌 = 고스트 writer). 단위시험은
+    # 프로세스 하나에 재기동이 없으므로 문서화된 옵트인을 쓴다.
+    omd = Coordinator(db_path=str(tmp_path / "omd.db"))
     ids = declare_to_omd(omd, _spec(tmp_path))
     assert set(ids) == {"A", "B", "C", "D"}
     omd.claim("ag1", ["src/a.py"], task_id="A")                      # A 점유
