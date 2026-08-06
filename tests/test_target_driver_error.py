@@ -100,3 +100,64 @@ def test_import_failure_is_a_verdict_too(tmp_path):
     assert "does_not_exist_anywhere" in run.driver_error
     assert not run.complete
     assert not run.results[0].gate_ok      # 이벤트 0건 — 게이트도 정직하게 RED
+
+
+# ── 호출 지점 (2026-08-07) ────────────────────────────────────────────────
+#
+# 최심 프레임 하나만 실으면 헬퍼를 부르는 드라이버에서 사유가 사라진다:
+# 헬퍼의 소스 라인은 `assert observed == expected` 처럼 일반적이고, 값과
+# 검사 이름을 든 줄은 **호출 지점**이다. 실측(sqcedit LX3 하네스)에서 그
+# 한 줄만 보고는 어느 검사가 죽었는지 알 수 없었다.
+
+
+def _write_helper_app(tmp_path, *, same_file: bool):
+    """헬퍼가 드라이버와 같은 파일 / 다른 파일 — 두 모양 다 실제로 쓰인다."""
+    helper = """
+def check_angles(observed, expected):
+    assert observed == expected
+"""
+    call = "    check_angles([0.0, -90.0], [0.0, -98.7])\n"
+    head = """
+import logging
+
+logger = logging.getLogger("checkout")
+"""
+    body = head
+    if same_file:
+        body += helper
+    else:
+        (tmp_path / "angle_helper.py").write_text(helper, encoding="utf-8")
+        body += "\nfrom angle_helper import check_angles\n"
+    body += """
+
+def run_pipeline(backend, cid):
+    logger.info("paid", extra={"event": "paid", "operation": "pay"})
+"""
+    body += call
+    (tmp_path / "driver_error_app.py").write_text(body, encoding="utf-8")
+
+
+@pytest.mark.parametrize("same_file", [True, False])
+def test_call_site_in_the_driver_is_named(tmp_path, same_file):
+    _write_helper_app(tmp_path, same_file=same_file)
+    run = run_loop(load_spec(_write_spec(tmp_path)))
+
+    assert run.driver_error is not None
+    # 터진 자리 — 헬퍼의 일반적인 assert.
+    assert "assert observed == expected" in run.driver_error
+    # ★ 그리고 사유 — 값을 든 드라이버의 호출 지점.
+    assert "called from" in run.driver_error
+    assert "check_angles([0.0, -90.0], [0.0, -98.7])" in run.driver_error
+    assert "in run_pipeline" in run.driver_error
+    assert not run.complete
+
+
+def test_no_call_site_line_when_the_driver_itself_raises(tmp_path):
+    """드라이버가 직접 터지면 호출 지점 줄은 없다 — 같은 프레임을 두 번
+    쓰는 것은 정보가 아니라 소음이다."""
+    _write_app(tmp_path, explode=True)
+    run = run_loop(load_spec(_write_spec(tmp_path)))
+
+    assert run.driver_error is not None
+    assert "assert 1 == 2" in run.driver_error
+    assert "called from" not in run.driver_error

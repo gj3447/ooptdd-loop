@@ -170,25 +170,53 @@ def _want_events(gate: list[dict]) -> list[str]:
     return want
 
 
-def _describe_driver_error(exc: BaseException) -> str:
-    """One line a user can act on — type, message, innermost frame.
+def _render_frame(f) -> str:
+    # The source line matters: a bare ``assert a == b`` has an empty message,
+    # so without it the line "what check died" is invisible — external red
+    # anchors (ouroboros drivers grepping for the asserted symbol) rely on it.
+    source = f" — {f.line.strip()}" if f.line else ""
+    return f"{f.filename}:{f.lineno} in {f.name}{source}"
+
+
+def _describe_driver_error(exc: BaseException,
+                           target_file: str | None = None) -> str:
+    """One line a user can act on — type, message, innermost frame, call site.
 
     The full traceback is deliberately not preserved: the contract of
     ``ooptdd-loop run`` is verdicts, and a driver failure is a verdict
     (``complete=False``) with a pointer, not a stack dump.
+
+    But *one* frame is not always the actionable one. When the driver calls a
+    helper that raises, the innermost frame is inside the helper and its source
+    line is generic (``assert observed == expected``) — the line that names the
+    real check, with its values, is the **call site in the driver**. Rendering
+    only the innermost frame threw that away (2026-08-07 실측: a deep helper
+    left `driver_error` pointing at the helper's generic assert, and nothing
+    said which of the driver's checks had died).
+
+    So when the deepest frame *inside the target's own file* differs from the
+    innermost frame overall, both ship — still one line, now with the "what"
+    and the "where in my code" that a user can act on.
     """
     import traceback
 
     frames = traceback.extract_tb(exc.__traceback__)
-    where = ""
-    if frames:
-        f = frames[-1]
-        # The source line matters: a bare ``assert a == b`` has an empty message,
-        # so without it the line "what check died" is invisible — external red
-        # anchors (ouroboros drivers grepping for the asserted symbol) rely on it.
-        source = f" — {f.line.strip()}" if f.line else ""
-        where = f" (at {f.filename}:{f.lineno} in {f.name}{source})"
-    return f"{type(exc).__name__}: {exc}{where}"
+    if not frames:
+        return f"{type(exc).__name__}: {exc}"
+    innermost = frames[-1]
+    where = f" (at {_render_frame(innermost)}"
+    if target_file:
+        target = os.path.realpath(target_file)
+        # The deepest frame in the driver that is *not* the raising frame — the
+        # call site. Excluding the raising frame by identity (not by file) is
+        # what makes this work for a helper living in the driver's own file,
+        # which is the common shape: `run_pipeline` calls `_check_angles`, both
+        # in the driver, and only the call site carries the values.
+        own = [f for f in frames[:-1]
+               if f.filename and os.path.realpath(f.filename) == target]
+        if own:
+            where += f" · called from {_render_frame(own[-1])}"
+    return f"{type(exc).__name__}: {exc}{where})"
 
 
 def _produce_logs(spec: Spec, backend, cid: str):
@@ -245,7 +273,8 @@ def _produce_logs(spec: Spec, backend, cid: str):
                 try:
                     getattr(mod, fn)(backend, cid)
                 except Exception as exc:  # noqa: BLE001 — same: evaluate what arrived
-                    driver_error = _describe_driver_error(exc)
+                    driver_error = _describe_driver_error(
+                        exc, getattr(mod, "__file__", None))
         return charge, driver_error
     elif t.mode == "command":
         if not t.command:
