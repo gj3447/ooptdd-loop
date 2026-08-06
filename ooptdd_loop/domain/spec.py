@@ -111,7 +111,14 @@ def load_spec(path: str) -> Spec:
 
     import yaml
 
-    with open(path) as fh:
+    # YAML is UTF-8 by specification (YAML 1.2 §5.2), so the file's encoding is
+    # not a local question — reading it through the *locale* codec is simply
+    # wrong. On a Korean Windows box that locale is cp949, and every spec whose
+    # description carries Hangul dies at the first multibyte character:
+    # `UnicodeDecodeError: 'cp949' codec can't decode byte 0xed` (measured
+    # 2026-08-07, beadscan_tester — 122 of 1287 tests failed from this one line,
+    # all of them the `*_loop_complete` / `*_golden_no_regression` gates).
+    with open(path, encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
     t = data.get("target", {})
     methodology_data = data.get("methodology") or {}
