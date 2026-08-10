@@ -285,8 +285,9 @@ def t_ontology_lookup(ontology: str, event_type: str) -> dict:
     et = Ontology.from_file(ontology).get(event_type)
     if et is None:
         return {"event_type": event_type, "found": False}
-    return {"event_type": et.name, "found": True, "required": et.required,
-            "constraints": et.constraints, "description": et.description}
+    # upstream freezes these as tuples now; this is a JSON tool boundary
+    return {"event_type": et.name, "found": True, "required": list(et.required),
+            "constraints": list(et.constraints), "description": et.description}
 
 
 def t_coverage(spec_name: str) -> dict:

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import math
 import sys
 import time
 from dataclasses import dataclass, field
@@ -143,7 +144,11 @@ class _SessionWindowBackend:
 
     @property
     def default_lookback_s(self):
-        return self._inner.default_lookback_s + max(0.0, time.time() - self._session_t0)
+        # Upstream query sites multiply this by 1_000_000 and (post-a53e844)
+        # reject non-integer window bounds, so the grown lookback must stay an
+        # int. ceil, not int(): the window may only ever widen, never shrink
+        # below (session start - base lookback).
+        return self._inner.default_lookback_s + math.ceil(max(0.0, time.time() - self._session_t0))
 
     def __getattr__(self, name):
         return getattr(self._inner, name)

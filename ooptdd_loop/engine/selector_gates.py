@@ -7,6 +7,7 @@ that evaluator as the default path and adds the OOPTDD selector DSL on top.
 from __future__ import annotations
 
 import operator
+import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -70,7 +71,11 @@ def evaluate_gate(backend, spec: dict, *, ontology=None) -> dict:
         "require_signature", "require_corroboration") if k in spec}
     delegated["cid"] = cid
     delegated["expect"] = non_selector
-    out = evaluate_ooptdd_gate(backend, delegated, ontology=ontology)
+    # Post-a53e844 the engine never reads os.environ itself; policy overrides
+    # (OOPTDD_REQUIRE_SIGNATURE / error-forbid / …) only apply if an outer
+    # adapter hands in a snapshot. This module is that adapter.
+    out = evaluate_ooptdd_gate(backend, delegated, ontology=ontology,
+                               environ=dict(os.environ))
     checks.extend(out["checks"])
     reachable = reachable and out["reachable"]
 

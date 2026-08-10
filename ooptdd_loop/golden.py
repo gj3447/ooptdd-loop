@@ -143,8 +143,8 @@ def _query_events(spec: Spec, cid: str) -> list[dict]:
     now_us = int(time.time() * 1_000_000)
     result = backend.query(
         cid,
-        since_us=now_us - backend.default_lookback_s * 1_000_000,
-        until_us=now_us + backend.default_future_buffer_s * 1_000_000,
+        since_us=now_us - int(backend.default_lookback_s * 1_000_000),
+        until_us=now_us + int(backend.default_future_buffer_s * 1_000_000),
     )
     if not result.reachable:
         return []

@@ -303,8 +303,8 @@ class OOPTDDPytestPlugin:
         future_buffer_s = getattr(backend, "default_future_buffer_s", 0)
         result = backend.query(
             self.cid,
-            since_us=now_us - lookback_s * 1_000_000,
-            until_us=now_us + future_buffer_s * 1_000_000,
+            since_us=now_us - int(lookback_s * 1_000_000),
+            until_us=now_us + int(future_buffer_s * 1_000_000),
         )
         if not result.reachable:
             return []
@@ -365,8 +365,13 @@ class OOPTDDPytestPlugin:
 
 
 def _jsonable_events(events: list[dict]) -> list[dict[str, Any]]:
-    """Return an execnet/JSON-safe event list for xdist workeroutput."""
-    return json.loads(json.dumps(events, default=str))
+    """Return an execnet/JSON-safe event list for xdist workeroutput.
+
+    Upstream query() yields immutable mapping views (mappingproxy) since
+    a53e844; json.dumps(..., default=str) would stringify each whole view
+    into ONE string, and the controller-side replay ship() then rejects the
+    batch ("events must contain mappings"). Materialise real dicts first."""
+    return json.loads(json.dumps([dict(e) for e in events], default=str))
 
 
 def _backend_options(raw: str | None, *, default: dict[str, Any]) -> dict[str, Any]:

@@ -71,8 +71,8 @@ def rca_block(backend, cid: str, *, mode: str, want_events: list[str]) -> str:
         lines.append("  (oo CLI unavailable — falling back to backend query)")
 
     now_us = int(time.time() * 1_000_000)
-    res = backend.query(cid, since_us=now_us - backend.default_lookback_s * 1_000_000,
-                        until_us=now_us + backend.default_future_buffer_s * 1_000_000)
+    res = backend.query(cid, since_us=now_us - int(backend.default_lookback_s * 1_000_000),
+                        until_us=now_us + int(backend.default_future_buffer_s * 1_000_000))
     if not res.reachable:
         lines.append("  store UNREACHABLE -> verdict inconclusive (?): infra problem, "
                      "not the code. Check the store/credentials, do NOT 'fix' the code.")
