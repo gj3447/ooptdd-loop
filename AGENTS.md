@@ -35,29 +35,40 @@ Everything else — lint, the CLI and MCP smokes, spec validation, golden diffs 
 exists **only in `scripts/verify_ooptdd.sh`, which CI never calls.** A green CI
 badge therefore says nothing about those. Run the script before claiming done.
 
-## Establish a baseline before attributing any failure
+## The suite is red against current ooptdd — solved, not mysterious
 
-**Measured 2026-08-10** on `117a856`, in a locally rebuilt environment
-(Python 3.14.6, pytest 9.1.1, `ruff 0.4.10`, sibling `ooptdd 0.6.0` installed
-from `git@main`):
+**Root cause (2026-08-10, bisected):** ooptdd `a53e844` (2026-08-07, "make
+ooptdd a generic functional framework") removed the memory backend's
+module-global store. Before it, `get_backend("memory")` anywhere in a process
+saw the same events; after it, every `get_backend()` call builds a fresh
+registry and a fresh `MemoryStore` "explicitly owned by a composition root".
+This repository's watch/tools/plugin paths still assume the shared-store
+semantics — they ship through one instance and judge through another, so the
+judge sees nothing and `complete` stays `False`.
+
+Measured on identical loop code (`40328b3`, Python 3.13, pytest 9.1.1):
 
 ```
-pytest -q          →  34 failed, 203 passed, 3 skipped
-ruff check .       →  2 findings (E402 in tests/test_omd_bridge.py)
+ooptdd @ a53e844~1 (pre-refactor)  →  238 passed, 4 skipped
+ooptdd @ main      (post-refactor) →   33 failed, 205 passed, 4 skipped
 ```
 
-Commit messages from the same day claim `240 passed`. The gap is unexplained.
-It is not a missing dependency — the failures are real `AttributeError`s, not
-import errors — so it is either environment-sensitive or the claims were made
-against a narrower selection.
+So the `240 passed` claims in this repo's commit messages were real — they were
+made against a pre-refactor ooptdd install. Any fresh environment that installs
+`git+…ooptdd.git@main` (which is exactly what CI and the README say to do) gets
+the post-refactor package and goes red.
 
-**Therefore: run the suite once before you touch anything, and record the
-number.** Do not attribute a failure to your change, and do not report a
-regression, without that starting number. Do not "fix" a test that was already
-failing as part of an unrelated diff.
+Consequences:
 
-Resolving this gap is itself worthwhile work. It is not done.
-
+- **For a green environment today**: install ooptdd at `a53e844~1`
+  (`bcdf714`). Do not treat that as a fix — it is a pin against a deliberate
+  upstream design change.
+- **The real fix is in this repository**: thread one explicitly-owned
+  backend/store instance through the ship and judge paths (ooptdd's new
+  composition-root contract) instead of calling `get_backend("memory")`
+  independently in each place. Until that lands, the suite documents the skew.
+- Do not "fix" individual watch tests by weakening their assertions; they are
+  correctly detecting that ship and judge no longer share a store.
 ## The ruff version trap
 
 `pyproject.toml` declares `ruff>=0.4` with no upper bound, and **ruff expanded
