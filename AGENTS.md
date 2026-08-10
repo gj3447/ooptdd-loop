@@ -35,40 +35,33 @@ Everything else — lint, the CLI and MCP smokes, spec validation, golden diffs 
 exists **only in `scripts/verify_ooptdd.sh`, which CI never calls.** A green CI
 badge therefore says nothing about those. Run the script before claiming done.
 
-## The suite is red against current ooptdd — solved, not mysterious
+## The 2026-08-10 upstream skew — solved AND fixed
 
-**Root cause (2026-08-10, bisected):** ooptdd `a53e844` (2026-08-07, "make
-ooptdd a generic functional framework") removed the memory backend's
-module-global store. Before it, `get_backend("memory")` anywhere in a process
-saw the same events; after it, every `get_backend()` call builds a fresh
-registry and a fresh `MemoryStore` "explicitly owned by a composition root".
-This repository's watch/tools/plugin paths still assume the shared-store
-semantics — they ship through one instance and judge through another, so the
-judge sees nothing and `complete` stays `False`.
+ooptdd a53e844 (2026-08-07, "generic functional framework") changed five
+contracts at once: per-instance memory stores (no module-global sharing),
+integer-only query window bounds, no ambient os.environ reads in the engine,
+immutable mappingproxy query views, and tuple-frozen ontology fields. This
+repo silently depended on all five; a fresh  install went from
+238 passed to 33 failed with no commit here changing.
 
-Measured on identical loop code (`40328b3`, Python 3.13, pytest 9.1.1):
+Fixed in 54246df / ec0daa6 / d5d7ef1. The load-bearing piece is
+**ooptdd_loop/backends.py** — the composition root that owns the one
+process-level MemoryStore. Every backend acquisition in the package AND in the
+test suite goes through ; two raw 
+calls silently stop sharing evidence, which is the exact bug class the skew
+was made of. Suite against current ooptdd main: **238 passed, 4 skipped, 0
+failed** — the pre-refactor green, restored without touching one assertion.
 
-```
-ooptdd @ a53e844~1 (pre-refactor)  →  238 passed, 4 skipped
-ooptdd @ main      (post-refactor) →   33 failed, 205 passed, 4 skipped
-```
+Rules that keep it fixed:
 
-So the `240 passed` claims in this repo's commit messages were real — they were
-made against a pre-refactor ooptdd install. Any fresh environment that installs
-`git+…ooptdd.git@main` (which is exactly what CI and the README say to do) gets
-the post-refactor package and goes red.
-
-Consequences:
-
-- **For a green environment today**: install ooptdd at `a53e844~1`
-  (`bcdf714`). Do not treat that as a fix — it is a pin against a deliberate
-  upstream design change.
-- **The real fix is in this repository**: thread one explicitly-owned
-  backend/store instance through the ship and judge paths (ooptdd's new
-  composition-root contract) instead of calling `get_backend("memory")`
-  independently in each place. Until that lands, the suite documents the skew.
-- Do not "fix" individual watch tests by weakening their assertions; they are
-  correctly detecting that ship and judge no longer share a store.
+- Never call  directly from loop code or tests;
+  go through . For an isolated world, pass your
+  own  explicitly.
+- Argument-less  is a no-op upstream; use
+   in fixtures.
+- Anything crossing the xdist workeroutput boundary must be materialised into
+  plain dicts first (); upstream query views are immutable
+  proxies and  will stringify them whole.
 ## The ruff version trap
 
 `pyproject.toml` declares `ruff>=0.4` with no upper bound, and **ruff expanded
