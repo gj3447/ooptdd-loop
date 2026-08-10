@@ -38,7 +38,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-from ooptdd.backends import get_backend
+from ooptdd_loop.backends import resolve as get_backend
 
 from .report import _check_miss, next_step_context, render, run_payload
 from .runner import RunResult, _new_cid, run_loop

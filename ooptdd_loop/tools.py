@@ -102,7 +102,7 @@ def t_watch_tick(spec: str, cid: str, produce: bool = False) -> dict:
     falsely RED on the second call — and a forged partial run could flip a RED one
     green). Re-judge with ``produce=False``, or produce under a fresh cid.
     kg_write/kg_store stay off — with the guard, calls are repeat-safe."""
-    from ooptdd.backends import get_backend
+    from ooptdd_loop.backends import resolve as get_backend
 
     from .engine.selector_gates import _query_events
     from .runner import run_loop

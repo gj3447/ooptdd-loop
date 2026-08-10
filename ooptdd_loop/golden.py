@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ooptdd.backends import get_backend
+from ooptdd_loop.backends import resolve as get_backend
 
 from .runner import _new_cid, evaluate_requirements, run_loop
 from .domain.spec import Spec

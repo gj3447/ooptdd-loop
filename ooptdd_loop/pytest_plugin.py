@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from ooptdd.backends import get_backend
+from ooptdd_loop.backends import resolve as get_backend
 
 from .report import next_step_context, render
 from .runner import _new_cid, evaluate_requirements

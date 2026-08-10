@@ -142,7 +142,7 @@ def _ship_remote(ev: dict) -> None:
     if not os.getenv("OOPTDD_OO_URL"):
         return  # no store configured -> JSONL capture only
     try:
-        from ooptdd.backends import get_backend
+        from ooptdd_loop.backends import resolve as get_backend
 
         get_backend("openobserve", stream=os.getenv("OOPTDD_OO_STREAM", "git")).ship([ev])
     except Exception:

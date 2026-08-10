@@ -25,7 +25,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Sequence
 
-from ooptdd.backends import get_backend
+from ooptdd_loop.backends import resolve as get_backend
 
 from .engine.selector_gates import evaluate_gate, selector_event_names
 from .engine.longinus import ReferenceSite, verify_binding, write_to_kg
