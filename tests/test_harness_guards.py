@@ -19,7 +19,7 @@ import sys
 
 import pytest
 
-from ooptdd.backends import memory_reset
+from ooptdd_loop.backends import reset_process_memory as memory_reset
 from ooptdd_loop import harness
 from ooptdd_loop.harness import (
     DurableRunJournal,

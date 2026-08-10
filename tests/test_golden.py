@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from ooptdd.backends import memory_reset
+from ooptdd_loop.backends import reset_process_memory as memory_reset
 from ooptdd_loop.cli import main
 from ooptdd_loop.golden import diff_golden, save_golden
 from ooptdd_loop.domain.spec import load_spec

@@ -2,7 +2,9 @@ import time
 
 import pytest
 
-from ooptdd.backends import get_backend, memory_reset
+from ooptdd_loop.backends import resolve as get_backend
+
+from ooptdd_loop.backends import reset_process_memory as memory_reset
 from ooptdd_loop.local_capture import structlog_event_processor
 from ooptdd_loop.runner import run_loop
 from ooptdd_loop.domain.spec import load_spec
@@ -131,7 +133,7 @@ def test_capture_accepts_sibling_logger_list(tmp_path):
     """
     import logging
 
-    from ooptdd.backends import get_backend
+    from ooptdd_loop.backends import resolve as get_backend
     from ooptdd_loop.local_capture import capture_logging_to_backend
 
     backend = get_backend("memory")

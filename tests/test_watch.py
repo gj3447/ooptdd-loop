@@ -14,7 +14,9 @@ import time
 
 import pytest
 
-from ooptdd.backends import get_backend, memory_reset
+from ooptdd_loop.backends import resolve as get_backend
+
+from ooptdd_loop.backends import reset_process_memory as memory_reset
 from ooptdd_loop import tools
 from ooptdd_loop.cli import main
 from ooptdd_loop.watch import Watcher, tick_payload, watched_paths

@@ -10,7 +10,7 @@ def _write_app_and_spec(pytester, *, emit: bool) -> tuple[str, str]:
     pytester.makepyfile(
         app_under_test="""
         import os
-        from ooptdd.backends import get_backend
+        from ooptdd_loop.backends import resolve as get_backend
 
 
         def emit_checkout_complete():
@@ -154,7 +154,7 @@ def test_pytest_plugin_xdist_forwards_memory_events_and_traceparent(pytester):
     pytester.makepyfile(
         app_under_test="""
         import os
-        from ooptdd.backends import get_backend
+        from ooptdd_loop.backends import resolve as get_backend
 
 
         def _ship(event):

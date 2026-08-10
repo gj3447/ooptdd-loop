@@ -8,7 +8,9 @@
 """
 from __future__ import annotations
 
-from ooptdd.backends import MemoryBackend, memory_reset
+from ooptdd.backends import MemoryBackend
+
+from ooptdd_loop.backends import reset_process_memory as memory_reset
 
 from ooptdd_loop import runner
 from ooptdd_loop.engine.selector_gates import evaluate_gate

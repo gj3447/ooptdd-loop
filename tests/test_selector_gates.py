@@ -1,6 +1,6 @@
 import pytest
 
-from ooptdd.backends import memory_reset
+from ooptdd_loop.backends import reset_process_memory as memory_reset
 from ooptdd_loop.report import render
 from ooptdd_loop.runner import run_loop
 from ooptdd_loop.domain.spec import load_spec

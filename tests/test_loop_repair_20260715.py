@@ -39,7 +39,7 @@ import sys
 
 import pytest
 
-from ooptdd.backends import memory_reset
+from ooptdd_loop.backends import reset_process_memory as memory_reset
 from ooptdd_loop import cli
 from ooptdd_loop.harness import DEFAULT_ENV_ALLOWLIST, INHERIT_ALL
 from ooptdd_loop.runner import run_until_complete

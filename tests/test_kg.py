@@ -9,7 +9,7 @@ Pre-registered metric (LakatosTree_ooptdd_ontology_20260616 / V2-kg-native-loop-
 import os
 from types import SimpleNamespace
 
-from ooptdd.backends import memory_reset
+from ooptdd_loop.backends import reset_process_memory as memory_reset
 from ooptdd_loop.kg import InMemoryKgStore
 from ooptdd_loop.runner import run_loop
 from ooptdd_loop.domain.spec import load_spec
