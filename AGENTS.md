@@ -98,3 +98,22 @@ event set, deleting a gate, or narrowing the CI matrix does.**
 5. Before claiming completion, run `scripts/verify_ooptdd.sh`.
 6. Report which commands you ran and what they printed. Do not report a green
    you did not observe.
+
+## Execution Budget
+
+The loop is bounded by construction — every bound lives in `harness.LoopGuard`
+and every stop it decides is a typed `LoopReason`:
+
+- `--passes` (pass ceiling) and `--patience` (consecutive no-progress passes
+  stop the loop as a stall);
+- `--max-seconds` (wall-clock) and `--max-spend` + `--spend-file` (agent spend,
+  fail-closed when the meter cannot be read);
+- `--fix-timeout` — per-fix bound, **1800 s by default** (2026-08-10): a hung
+  fix is killed with its whole process tree. `--fix-timeout 0` (API:
+  `fix_timeout_s=None`) is the explicit unbounded opt-out;
+- `--fix-write-allow` — write-set audit; a fix writing outside it stops the loop.
+
+Do not arm an autonomous fix loop with every bound switched off. The measured
+failure mode (2026-08-07..10) was 13-43 hour agent sessions whose every time
+bound was opt-in — being bounded is the default here, and opting out is a
+decision you state, not a state you drift into.

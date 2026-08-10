@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     # charge_coverage 는 adapter(root) 계층 — engine 아님(test_architecture 계층규칙 준수).
     from .charge_coverage import ChargeReport
 from .harness import (
+    DEFAULT_FIX_TIMEOUT_S,
     DurableRunJournal,
     JournalEntry,
     LoopGuard,
@@ -467,7 +468,7 @@ def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 
                        max_seconds: float | None = None,
                        max_spend: float | None = None,
                        spend_fn: Callable[[], float] | None = None,
-                       fix_timeout_s: float | None = None,
+                       fix_timeout_s: float | None = DEFAULT_FIX_TIMEOUT_S,
                        journal_path=None, run_id: str | None = None, resume: bool = False,
                        env_allowlist: str | Sequence[str] | None = None,
                        write_allowlist: Sequence[str] | None = None):
@@ -504,7 +505,10 @@ def run_until_complete(spec: Spec, *, cid: str | None = None, max_passes: int = 
       here, not a silent no-op.
     * ``fix_timeout_s`` (S5) bounds one fix invocation independently of the wall-clock; the
       effective bound is the tighter of the two. On timeout the fix's process tree is killed and
-      the loop stops with ``fix_timeout``.
+      the loop stops with ``fix_timeout``. **Bounded by default** (``DEFAULT_FIX_TIMEOUT_S``,
+      30 min): 2026-08-07..10 measured 13-43h agent loops whose every time bound was opt-in.
+      Pass a larger value for a deliberately long fix, or ``None`` as the explicit unbounded
+      opt-out.
     * ``journal_path`` (S4) appends one JSONL line per completed pass; ``resume=True`` with the
       same ``run_id`` restarts at the next unpaid pass with the recorded stall state, instead
       of repaying every agent call from pass 1. ``run_id`` defaults to the cid, which itself

@@ -131,3 +131,27 @@ def test_fix_command_sees_rca_env(tmp_path):
     assert not run.complete                       # printf doesn't fix the code
     assert os.path.exists(marker)
     assert "REQ-PING" in marker.read_text()       # the RCA named the RED requirement
+
+
+# ── B1: a fix loop is time-bounded by DEFAULT, not by opt-in ───────────────────
+def test_fix_loop_time_bound_is_the_default_not_an_option():
+    """2026-08-07..10 measured failure: agent fix loops ran 13-43 hours because every
+    time bound was opt-in and nobody opted in. ``max_passes`` bounds how many passes
+    run, but only ``fix_timeout_s``/``max_seconds`` bound how long ONE hung fix can
+    hold the loop — so the per-fix bound ships as a default. Explicit
+    ``fix_timeout_s=None`` remains the deliberate opt-out."""
+    import inspect
+
+    from ooptdd_loop.harness import DEFAULT_FIX_TIMEOUT_S
+
+    assert DEFAULT_FIX_TIMEOUT_S and DEFAULT_FIX_TIMEOUT_S > 0
+    sig = inspect.signature(run_until_complete)
+    assert sig.parameters["fix_timeout_s"].default == DEFAULT_FIX_TIMEOUT_S
+
+
+def test_fix_loop_explicit_none_is_still_the_unbounded_optout(tmp_path):
+    # The opt-out must stay callable: None disables the per-fix bound (the old default),
+    # and a converging fix still completes under it.
+    run = run_until_complete(load_spec(_make(tmp_path, emits=False)), max_passes=2,
+                             fix_cmd=_fix_script(tmp_path), fix_timeout_s=None)
+    assert run.complete

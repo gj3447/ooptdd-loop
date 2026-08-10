@@ -14,6 +14,7 @@ from pathlib import Path
 import sys
 
 from .harness import (
+    DEFAULT_FIX_TIMEOUT_S,
     DEFAULT_ENV_ALLOWLIST,
     INHERIT_ALL,
     JournalCorruptionError,
@@ -83,7 +84,9 @@ def _cmd_run(args) -> int:
                                  max_spend=args.max_spend,
                                  spend_fn=spend_file_reader(args.spend_file)
                                  if args.spend_file else None,
-                                 fix_timeout_s=args.fix_timeout,
+                                 fix_timeout_s=(None if args.fix_timeout is not None
+                                                and args.fix_timeout <= 0
+                                                else args.fix_timeout),
                                  journal_path=args.journal, run_id=args.run_id,
                                  resume=args.resume,
                                  env_allowlist=_fix_env_allowlist(args.fix_env_allow),
@@ -402,9 +405,11 @@ def main(argv=None) -> int:
     r.add_argument("--spend-file", default=None,
                    help="file holding cumulative agent spend, updated by the fix command; "
                         "the meter --max-spend reads (unreadable => stop, fail-closed)")
-    r.add_argument("--fix-timeout", type=float, default=None,
+    r.add_argument("--fix-timeout", type=float, default=DEFAULT_FIX_TIMEOUT_S,
                    help="kill the fix command (and everything it spawned) after this many "
-                        "seconds; stops with loop_reason=fix_timeout")
+                        "seconds; stops with loop_reason=fix_timeout. Bounded by default "
+                        f"({DEFAULT_FIX_TIMEOUT_S:.0f}s); 0 or less disables the bound "
+                        "(explicit unbounded opt-out)")
     r.add_argument("--journal", default=None,
                    help="append-only JSONL run journal; one line per completed pass")
     r.add_argument("--run-id", default=None,

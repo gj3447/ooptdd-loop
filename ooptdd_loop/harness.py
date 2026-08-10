@@ -81,6 +81,13 @@ class LoopReason(str, Enum):
 
 
 # ── S1 + S5: the independent stop ─────────────────────────────────────────────
+#: Default bound for ONE fix invocation (seconds). Measured 2026-08-07..10: agent fix
+#: loops ran 13-43 hours because every time bound was opt-in and nobody opted in — so the
+#: per-fix bound ships as a default. A deliberate long-running fix passes an explicit
+#: larger value; ``fix_timeout_s=None`` is the explicit unbounded opt-out.
+DEFAULT_FIX_TIMEOUT_S = 1800.0
+
+
 class LoopGuard:
     """Every bound on the loop, in one place, decided without asking the agent (S1 + S5).
 
